@@ -21,7 +21,7 @@ from sklearn.multioutput import MultiOutputRegressor
 from lightgbm import LGBMRegressor
 from catboost import CatBoostRegressor
 from sklearn.neighbors import KNeighborsRegressor, NearestNeighbors
-from sklearn.model_selection import StratifiedShuffleSplit, RandomizedSearchCV, cross_validate, GroupKFold, ShuffleSplit
+from sklearn.model_selection import StratifiedShuffleSplit, RandomizedSearchCV, cross_validate, GroupKFold, ShuffleSplit, GroupShuffleSplit
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, PolynomialFeatures
 from sklearn.compose import TransformedTargetRegressor
 from sklearn.pipeline import Pipeline
@@ -119,7 +119,7 @@ else:
                     plt.figure(figsize=(10, 5))
                     plt.plot(df['Time'], df['COF'], label='Eredeti jel', color='silver', alpha=0.7)
 
-                df['COF'] = df['COF'].rolling(window=config.ROLLING_WINDOW_SIZE, min_periods=1, center=True).mean()
+                df['COF'] = df['COF'].rolling(window=config.ROLLING_WINDOW_SIZE, min_periods=1, center=False).mean()
 
                 if len(all_data) == 0:
                     plt.plot(df['Time'], df['COF'], label='Filtered signal (Rolling Mean)', color='orange', linewidth=2.5)
@@ -133,7 +133,7 @@ else:
                     plt.close()
 
                 all_data.append(df)
-        except Exception as e:
+        except (FileNotFoundError, KeyError, ValueError) as e:
             print(f"Error: {os.path.basename(filepath)} - {e}")
 
     if not all_data:
@@ -195,12 +195,30 @@ y_train, y_test = Y.loc[train_idx], Y.loc[test_idx]
 groups_train = groups.loc[train_idx]
 weights_train = full_df['Sample_Weight'].loc[train_idx]
 
+X_cols_raw = X.columns
+
+print("\n--- Applying Global Feature Engineering (Interaction & VIF) ---")
+global_interact = InteractionFeaturesTransformer(
+    load_col='Load', 
+    temp_col='Temperature', 
+    conc_col='Concentration', 
+    ester_col='Esterified'
+)
+global_vif = VIFSelector(threshold=10.0)
+
+X_train_interact = global_interact.fit_transform(X_train)
+X_train = global_vif.fit_transform(X_train_interact)
+
+X_test_interact = global_interact.transform(X_test)
+X_test = global_vif.transform(X_test_interact)
+
+X_interact = global_interact.transform(X)
+X = global_vif.transform(X_interact)
+
 models_config = {
     "XGBoost": {
         "model": TransformedTargetRegressor(
             regressor=Pipeline([
-                ('interact', InteractionFeaturesTransformer()),
-                ('vif', VIFSelector(threshold=10.0)),
                 ('scaler', PandasStandardScaler()),
                 ('xgb', MultiOutputRegressor(XGBRegressor(objective='reg:squarederror', n_jobs=-1, random_state=config.RANDOM_SEED)))
             ]),
@@ -218,8 +236,6 @@ models_config = {
     "Neural Network (MLP)": {
         "model": TransformedTargetRegressor(
             regressor=Pipeline([
-                ('interact', InteractionFeaturesTransformer()),
-                ('vif', VIFSelector(threshold=10.0)),
                 ('scaler', PandasStandardScaler()),
                 ('mlp', MLPRegressor(random_state=config.RANDOM_SEED, max_iter=500, early_stopping=True))
             ]),
@@ -236,8 +252,6 @@ models_config = {
     "Random Forest": {
         "model": TransformedTargetRegressor(
             regressor=Pipeline([
-                ('interact', InteractionFeaturesTransformer()), # Interakciók generálása
-                ('vif', VIFSelector(threshold=10.0)),            # VIF szűrés
                 ('scaler', PandasStandardScaler()),              # Skálázás Pandas kimenettel
                 ('rf', RandomForestRegressor(random_state=config.RANDOM_SEED, n_jobs=-1))
             ]),
@@ -253,8 +267,6 @@ models_config = {
     "LightGBM": {
         "model": TransformedTargetRegressor(
             regressor=Pipeline([
-                ('interact', InteractionFeaturesTransformer()),
-                ('vif', VIFSelector(threshold=10.0)),
                 ('scaler', PandasStandardScaler()),
                 ('lgbm', MultiOutputRegressor(LGBMRegressor(random_state=config.RANDOM_SEED, n_jobs=-1, verbose=-1)))
             ]),
@@ -270,8 +282,6 @@ models_config = {
     "CatBoost": {
         "model": TransformedTargetRegressor(
             regressor=Pipeline([
-                ('interact', InteractionFeaturesTransformer()),
-                ('vif', VIFSelector(threshold=10.0)),
                 ('scaler', PandasStandardScaler()),
                 ('cat', MultiOutputRegressor(CatBoostRegressor(random_state=config.RANDOM_SEED, verbose=0, allow_writing_files=False)))
             ]),
@@ -287,8 +297,6 @@ models_config = {
     "KNN Regressor": {
         "model": TransformedTargetRegressor(
             regressor=Pipeline([
-                ('interact', InteractionFeaturesTransformer()),
-                ('vif', VIFSelector(threshold=10.0)),
                 ('scaler', PandasStandardScaler()),
                 ('knn', KNeighborsRegressor())
             ]),
@@ -303,8 +311,6 @@ models_config = {
     "Polynomial Ridge Regression": {
         "model": TransformedTargetRegressor(
             regressor=Pipeline([
-                ('interact', InteractionFeaturesTransformer()),
-                ('vif', VIFSelector(threshold=10.0)),
                 ('scaler', PandasStandardScaler()),
                 ('poly', PolynomialFeatures(degree=2, include_bias=False)),
                 ('ridge', Ridge())
@@ -326,7 +332,7 @@ grid_df = pd.DataFrame(combos, columns=['Concentration', 'Load', 'Temperature'])
 grid_df['Esterified'] = config.PLOT_ESTERIFIED_STATE
 grid_df['Time'] = 7200
 grid_df = create_features(grid_df)
-grid_df = grid_df[X.columns]
+grid_df = grid_df[X_cols_raw]
 
 gkf_cv = GroupKFold(n_splits=5)
 
@@ -404,9 +410,10 @@ else:
         elif "LightGBM" in name: feature_imp = np.mean([est.feature_importances_ for est in best_estimator.regressor_.named_steps['lgbm'].estimators_], axis=0)
         elif "CatBoost" in name: feature_imp = np.mean([est.feature_importances_ for est in best_estimator.regressor_.named_steps['cat'].estimators_], axis=0)
 
-        selected_features_model = best_estimator.regressor_.named_steps['vif'].selected_features_
+        selected_features_model = global_vif.selected_features_
         
-        preds_grid = np.maximum(best_estimator.predict(grid_df), config.PREDICTION_LOWER_BOUND)
+        grid_df_trans = global_vif.transform(global_interact.transform(grid_df))
+        preds_grid = np.maximum(best_estimator.predict(grid_df_trans), config.PREDICTION_LOWER_BOUND)
         norm_cof = (preds_grid[:,0] - preds_grid[:,0].min()) / (preds_grid[:,0].max() - preds_grid[:,0].min() + 1e-9)
         norm_fai = (preds_grid[:,1] - preds_grid[:,1].min()) / (preds_grid[:,1].max() - preds_grid[:,1].min() + 1e-9)
         scores = norm_cof + norm_fai
@@ -418,8 +425,9 @@ else:
         
         t_end_vals = np.arange(6900, 7201, 10)
         check_df = pd.DataFrame({'Time': t_end_vals, 'Load': opt_load, 'Temperature': opt_temp, 'Concentration': opt_conc, 'Esterified': config.PLOT_ESTERIFIED_STATE})
-        check_df = create_features(check_df)[X.columns]
-        check_preds = np.maximum(best_estimator.predict(check_df), config.PREDICTION_LOWER_BOUND)
+        check_df = create_features(check_df)[X_cols_raw]
+        check_df_trans = global_vif.transform(global_interact.transform(check_df))
+        check_preds = np.maximum(best_estimator.predict(check_df_trans), config.PREDICTION_LOWER_BOUND)
         pred_cof_5m = np.mean(check_preds[:, 0])
         pred_fai_5m = np.mean(check_preds[:, 1])
             
@@ -465,7 +473,8 @@ print("\n--- Calculating Optimums over the Parameter Grid ---")
 for ester_state in [0, 1]:
     grid_df['Esterified'] = ester_state
     grid_df = create_features(grid_df)
-    preds = np.maximum(best_model_overall.predict(grid_df), config.PREDICTION_LOWER_BOUND)
+    grid_df_trans = global_vif.transform(global_interact.transform(grid_df))
+    preds = np.maximum(best_model_overall.predict(grid_df_trans), config.PREDICTION_LOWER_BOUND)
     
     norm_cof = (preds[:,0] - preds[:,0].min()) / (preds[:,0].max() - preds[:,0].min() + 1e-9)
     norm_fai = (preds[:,1] - preds[:,1].min()) / (preds[:,1].max() - preds[:,1].min() + 1e-9)
@@ -480,14 +489,16 @@ for ester_state in [0, 1]:
         plot_pareto_front(config.RESULTS_DIR, preds, grid_df['Temperature'], title=f"Pareto front over the full parameter grid - Esterified (1)")
 
     check_df = pd.DataFrame({'Time': np.arange(6900, 7201, 10), 'Load': opt_load, 'Temperature': opt_temp, 'Concentration': opt_conc, 'Esterified': ester_state})
-    check_df = create_features(check_df)[X.columns]
-    check_preds = np.maximum(best_model_overall.predict(check_df), config.PREDICTION_LOWER_BOUND)
+    check_df = create_features(check_df)[X_cols_raw]
+    check_df_trans = global_vif.transform(global_interact.transform(check_df))
+    check_preds = np.maximum(best_model_overall.predict(check_df_trans), config.PREDICTION_LOWER_BOUND)
     avg_cof_last5 = np.mean(check_preds[:, 0])
     avg_fai_last5 = np.mean(check_preds[:, 1])
     
     sim_input = pd.DataFrame({'Time': template_df['Time'], 'Load': opt_load, 'Temperature': opt_temp, 'Concentration': opt_conc, 'Esterified': ester_state})
-    sim_input = create_features(sim_input)[X.columns]
-    curve_preds = np.maximum(best_model_overall.predict(sim_input), config.PREDICTION_LOWER_BOUND)
+    sim_input = create_features(sim_input)[X_cols_raw]
+    sim_input_trans = global_vif.transform(global_interact.transform(sim_input))
+    curve_preds = np.maximum(best_model_overall.predict(sim_input_trans), config.PREDICTION_LOWER_BOUND)
     curve_cof = curve_preds[:, 0]
     curve_time = template_df['Time'].values
     
@@ -508,8 +519,9 @@ for ester_state in [0, 1]:
             stab_inputs.append({'Time': 7200, 'Load': l, 'Temperature': t, 'Concentration': opt_conc, 'Esterified': ester_state})
     
     if stab_inputs:
-        stab_df = create_features(pd.DataFrame(stab_inputs))[X.columns]
-        stab_preds = np.maximum(best_model_overall.predict(stab_df), config.PREDICTION_LOWER_BOUND)
+        stab_df = create_features(pd.DataFrame(stab_inputs))[X_cols_raw]
+        stab_df_trans = global_vif.transform(global_interact.transform(stab_df))
+        stab_preds = np.maximum(best_model_overall.predict(stab_df_trans), config.PREDICTION_LOWER_BOUND)
         max_dev_percent = np.max(np.abs(stab_preds[:, 0] - avg_cof_last5) / avg_cof_last5) * 100
         stability_status = "Stable" if max_dev_percent < 5.0 else "Unstable"
     else:
@@ -531,12 +543,10 @@ if config.USE_CACHE and os.path.exists(doe_cache_path):
 else:
     print("\n--- Starting Design of Experiments (DoE) generation (Cache not found or disabled) ---")
     start_doe = time.time()
-    interact_step = best_model_overall.regressor_.named_steps['interact']
-    vif_step = best_model_overall.regressor_.named_steps['vif']
-    selected_feats_doe = vif_step.selected_features_
+    selected_feats_doe = global_vif.selected_features_
 
-    X_doe = interact_step.transform(X)[selected_feats_doe]
-    grid_doe = interact_step.transform(grid_df)[selected_feats_doe]
+    X_doe = X.copy()
+    grid_doe = global_vif.transform(global_interact.transform(grid_df))
 
     doe_model = BaggingRegressor(estimator=RandomForestRegressor(n_estimators=20, random_state=config.RANDOM_SEED, n_jobs=1), n_estimators=10, random_state=config.RANDOM_SEED, n_jobs=1)
     print("Training DoE model on selected features...")
@@ -566,7 +576,7 @@ else:
     doe_grid['Uncertainty_COF'] = std_cof
     doe_grid['Uncertainty_FAI'] = std_fai
     doe_grid['Distance'] = dist_metric
-    doe_grid['Score'] = avg_uncertainty + norm_dist
+    doe_grid['Score'] = 0.7 * avg_uncertainty + 0.3 * norm_dist
 
     existing_set = set((round(row['Concentration'], 2), int(row['Load']), int(row['Temperature'])) for _, row in full_df[['Concentration', 'Load', 'Temperature']].iterrows())
     doe_candidates = doe_grid[~doe_grid.apply(lambda row: (round(row['Concentration'], 2), int(row['Load']), int(row['Temperature'])) in existing_set, axis=1)].sort_values(by='Score', ascending=False)
@@ -591,8 +601,9 @@ else:
 
 doe_img_files = []
 for i, (_, row) in enumerate(doe_suggestions.iterrows()):
-    sim_input = create_features(pd.DataFrame({'Time': template_df['Time'], 'Load': row['Load'], 'Temperature': row['Temperature'], 'Concentration': row['Concentration'], 'Esterified': config.PLOT_ESTERIFIED_STATE}))[X.columns]
-    curve_preds = np.maximum(best_model_overall.predict(sim_input), config.PREDICTION_LOWER_BOUND)
+    sim_input = create_features(pd.DataFrame({'Time': template_df['Time'], 'Load': row['Load'], 'Temperature': row['Temperature'], 'Concentration': row['Concentration'], 'Esterified': config.PLOT_ESTERIFIED_STATE}))[X_cols_raw]
+    sim_input_trans = global_vif.transform(global_interact.transform(sim_input))
+    curve_preds = np.maximum(best_model_overall.predict(sim_input_trans), config.PREDICTION_LOWER_BOUND)
     plt.figure(figsize=(10, 5))
     plt.plot(template_df['Time'], curve_preds[:, 0], color='purple', linewidth=2.5)
     plt.title(f"DoE suggestion #{i+1}: {row['Concentration']:.2f}% | {int(row['Load'])}N | {int(row['Temperature'])}°C")
@@ -635,20 +646,18 @@ if tree_results:
 
     try:
         start_shap = time.time()
-        vif_step = shap_model.regressor_.named_steps['vif']
         scaler_step = shap_model.regressor_.named_steps['scaler']
         
-        X_test_vif = vif_step.transform(X_test)
+        X_test_vif = X_test
+        vif_feature_names = global_vif.get_feature_names_out()
         
-        # DataFrame készítése és oszlopnevek megtartása a vif_step alapján
-        vif_feature_names = vif_step.get_feature_names_out()
         X_test_scaled = pd.DataFrame(
             scaler_step.transform(X_test_vif), 
             columns=vif_feature_names, 
             index=X_test.index
         )
         
-        X_test_display = X_test_vif.copy()
+        X_test_display = pd.DataFrame(X_test_vif.values, index=X_test.index, columns=vif_feature_names)
         X_test_display.rename(columns=config.NAME_MAPPING, inplace=True)
         
         model_step_name = None
@@ -681,7 +690,7 @@ if tree_results:
             shap_analysis_text = "<ul>" + "".join([f"<li><strong>{f}</strong> (SHAP: {i:.4f})</li>" for f, i in top_3]) + "</ul>"
             shap_duration = time.time() - start_shap
             print("SHAP analysis completed.")
-    except Exception as e:
+    except (FileNotFoundError, KeyError, ValueError) as e:
         print(f"Warning: SHAP analysis failed - {e}")
 else:
     print("No tree-based models found for SHAP analysis.")
@@ -702,20 +711,55 @@ ax.scatter(subset['Load'], subset['Temperature'], subset['Concentration'], c=sub
 plt.savefig(os.path.join(config.RESULTS_DIR, "3D_distribution_of_input_data.png"), dpi=300, bbox_inches='tight')
 plt.close()
 
+fig = plt.figure(figsize=(10, 8))
+ax = fig.add_subplot(111, projection='3d')
+ax.scatter(full_df['Load'], full_df['Temperature'], full_df['Concentration'], 
+           c='blue', marker='o', s=15, alpha=0.5, label='Existing Measurements')
+ax.scatter(doe_suggestions['Load'], doe_suggestions['Temperature'], doe_suggestions['Concentration'], 
+           c='red', s=800, alpha=0.2, label='DoE Space Coverage')
+ax.scatter(doe_suggestions['Load'], doe_suggestions['Temperature'], doe_suggestions['Concentration'], 
+           c='red', marker='x', s=50, label='DoE Points')
+ax.set_xlabel('Load [N]')
+ax.set_ylabel('Temperature [°C]')
+ax.set_zlabel('Concentration [%]')
+plt.legend()
+plt.title('3D Map of Existing Data and DoE Suggestions')
+plt.savefig(os.path.join(config.RESULTS_DIR, "DoE_3D_map.png"), dpi=300, bbox_inches='tight')
+plt.close()
+
 L_grid, T_grid = np.meshgrid(np.linspace(10, 200, 100), np.linspace(40, 120, 100))
-heatmap_input = create_features(pd.DataFrame({'Time': 7200, 'Load': L_grid.ravel(), 'Temperature': T_grid.ravel(), 'Concentration': opt_conc, 'Esterified': config.PLOT_ESTERIFIED_STATE}))[X.columns]
-cof_grid = np.maximum(best_model_overall.predict(heatmap_input), config.PREDICTION_LOWER_BOUND)[:, 0].reshape(L_grid.shape)
+heatmap_input = create_features(pd.DataFrame({'Time': 7200, 'Load': L_grid.ravel(), 'Temperature': T_grid.ravel(), 'Concentration': opt_conc, 'Esterified': config.PLOT_ESTERIFIED_STATE}))[X_cols_raw]
+heatmap_input_trans = global_vif.transform(global_interact.transform(heatmap_input))
+cof_grid = np.maximum(best_model_overall.predict(heatmap_input_trans), config.PREDICTION_LOWER_BOUND)[:, 0].reshape(L_grid.shape)
 plt.figure(figsize=(10, 8))
-plt.contourf(L_grid, T_grid, cof_grid, levels=100, cmap='plasma')
+contourf_plot = plt.contourf(L_grid, T_grid, cof_grid, levels=100, cmap='plasma')
+cbar = plt.colorbar(contourf_plot)
+cbar.set_label('Coefficient of friction (COF) [-]')
+contours_lines = plt.contour(L_grid, T_grid, cof_grid, levels=10, colors='black', alpha=0.5)
+plt.clabel(contours_lines, inline=True, fontsize=10, fmt='%.3f')
+plt.xlabel("Load [N]")
+plt.ylabel("Temperature [°C]")
+plt.title("Estimated COF Heatmap")
 plt.savefig(os.path.join(config.RESULTS_DIR, "COF_heatmap.png"), dpi=300, bbox_inches='tight')
 plt.close()
 
 plt.figure(figsize=(12, 10))
-plt.imshow(full_df[['Time', 'Load', 'Temperature', 'Concentration', 'Esterified', 'COF', 'Friction absolute integral']].corr(), cmap='coolwarm', interpolation='nearest')
+corr_cols = ['Time', 'Load', 'Temperature', 'Concentration', 'Esterified', 'COF', 'Friction absolute integral']
+corr_labels = ['Time', 'Load', 'Temperature', 'Concentration', 'Esterified', 'COF', 'Friction Absolute Integral']
+corr_matrix = full_df[corr_cols].corr()
+im = plt.imshow(corr_matrix, cmap='coolwarm', interpolation='nearest', vmin=-1, vmax=1)
+plt.colorbar(im)
+for i in range(len(corr_matrix.columns)):
+    for j in range(len(corr_matrix.columns)):
+        plt.text(j, i, f"{corr_matrix.iloc[i, j]:.2f}", ha="center", va="center", color="white" if abs(corr_matrix.iloc[i, j]) > 0.5 else "black")
+plt.xticks(range(len(corr_labels)), corr_labels, rotation=45, ha='right')
+plt.yticks(range(len(corr_labels)), corr_labels)
+plt.title("Correlation Matrix")
+plt.tight_layout()
 plt.savefig(os.path.join(config.RESULTS_DIR, "Correlation_matrix.png"), dpi=300, bbox_inches='tight')
 plt.close()
 
-plot_learning_curve(best_model_overall, X, Y, title=f"Learning curve ({best_model_name})", cv=ShuffleSplit(n_splits=5, test_size=0.2, random_state=config.RANDOM_SEED), results_dir=config.RESULTS_DIR, groups=groups, num_files=len(np.unique(groups)))
+plot_learning_curve(best_model_overall, X, Y, title=f"Learning curve ({best_model_name})", cv=GroupShuffleSplit(n_splits=5, test_size=0.2, random_state=config.RANDOM_SEED), results_dir=config.RESULTS_DIR, groups=groups, num_files=len(np.unique(groups)))
 
 html_path = os.path.join(config.RESULTS_DIR, "Eredmenyek_Riport.html")
 desc_df = full_df[['Time', 'Load', 'Temperature', 'Concentration', 'Esterified', 'COF', 'Friction absolute integral']].describe()
