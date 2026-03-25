@@ -87,7 +87,7 @@ def plot_pareto_front(results_dir, predictions, temperatures, title="Pareto fron
     plt.title(title)
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.4)
-    plt.savefig(os.path.join(results_dir, "Pareto_Optimization.png"), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(results_dir, "Pareto_Optimization.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight')
     plt.savefig(os.path.join(results_dir, "Pareto_Optimization.svg"), format='svg', bbox_inches='tight')
     plt.close()
 
@@ -119,7 +119,7 @@ def plot_learning_curve(estimator, X, y, title="Learning curve", cv=None, n_jobs
     plt.plot(train_sizes_files, test_scores_mean, 'o-', color="orange", linewidth=2.5, label="Cross-validation score")
     plt.ylim(max(0.0, np.min(test_scores_mean) - 0.1), 1.05)
     plt.legend(loc="best")
-    plt.savefig(os.path.join(results_dir, "Learning_Curve.png"), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(results_dir, "Learning_Curve.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight')
     plt.savefig(os.path.join(results_dir, "Learning_Curve.svg"), format='svg', bbox_inches='tight')
     plt.close()
 
@@ -196,6 +196,7 @@ def generate_html_report(results, xlsx_files, full_df, desc_df, html_path, resul
                         <th>MAE (Test)</th>
                         <th>Optimum (Conc./Load/Temp.)</th>
                         <th>Predicted value at the last 5 minutes (COF/FAI)</th>
+                        <th>Run-in Time [s]</th>
                         <th>Tuning & Training Time/Prediction Time</th>
                     </tr>
                 </thead>
@@ -210,6 +211,9 @@ def generate_html_report(results, xlsx_files, full_df, desc_df, html_path, resul
         rmse_str = f"{res['RMSE_Train']:.4f}/{res['RMSE_Test']:.4f}"
         rmse_split_str = f"{res['RMSE_COF']:.4f}/{res['RMSE_FAI']:.4f}"
         
+        runin_val = res.get('RunIn_Time', 0)
+        runin_str = f"{runin_val:.1f}" if isinstance(runin_val, (int, float)) else "N/A"
+        
         row_style = ' style="font-weight: bold;"' if res['Name'] == best_model_res['Name'] else ''
         
         html_content += f"""
@@ -222,6 +226,7 @@ def generate_html_report(results, xlsx_files, full_df, desc_df, html_path, resul
                         <td>{res['MAE_Test']:.4f}</td>
                         <td>{opt_str}</td>
                         <td>{pred_str}</td>
+                        <td>{runin_str}</td>
                         <td>{time_str}</td>
                     </tr>"""
                     
@@ -259,7 +264,19 @@ def generate_html_report(results, xlsx_files, full_df, desc_df, html_path, resul
             </ul>
             <strong>Feature importance:</strong><br>
             {feat_imp_str}
-        </div>"""
+        """
+        
+        opt_curve_img = res.get('Opt_Curve_File', '')
+        if opt_curve_img:
+            html_content += f"""
+            <div style="margin-top:15px;">
+                <strong>Optimum Curve (vs Base Oil):</strong><br>
+                <a href="{opt_curve_img}" target="_blank">
+                    <img src="{opt_curve_img}" alt="{res['Name']} Optimum Curve" style="max-width:600px; margin-top:10px; border:1px solid #ccc;">
+                </a>
+            </div>"""
+
+        html_content += "</div>"
 
     html_content += """
         <h2>5. Generated diagrams</h2>
