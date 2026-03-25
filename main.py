@@ -144,7 +144,7 @@ else:
     full_df = full_df[(full_df['COF'] > 0) & (full_df['Friction absolute integral'] > 0)]
     full_df = create_features(full_df)
 
-    full_df = filter_outliers_grouped(full_df, 'File_ID', ['COF', 'Friction absolute integral'])
+    full_df = filter_outliers_grouped(full_df, 'File_ID', ['COF', 'Friction absolute integral'], low_q=0.05, high_q=0.95)
 
     if 'Esterified' not in full_df.columns:
         full_df['Esterified'] = 0
@@ -228,7 +228,7 @@ models_config = {
         "params": {
             "regressor__xgb__estimator__n_estimators": [50, 100, 150],
             "regressor__xgb__estimator__learning_rate": [0.05, 0.1, 0.2],
-            "regressor__xgb__estimator__max_depth": [3, 4, 5],
+            "regressor__xgb__estimator__max_depth": [4, 6, 8],
             "regressor__xgb__estimator__reg_alpha": [0, 0.1, 1],
             "regressor__xgb__estimator__reg_lambda": [5, 10, 20, 50]
         }
@@ -243,8 +243,8 @@ models_config = {
             inverse_func=np.exp
         ),
         "params": {
-            "regressor__mlp__hidden_layer_sizes": [(50,), (100,), (50, 50), (100, 50)],
-            "regressor__mlp__alpha": [0.1, 1.0, 10.0],
+            "regressor__mlp__hidden_layer_sizes": [(100, 50, 25), (64, 64, 64)],
+            "regressor__mlp__alpha": [0.1, 1.0, 5.0],
             "regressor__mlp__activation": ['relu', 'tanh'],
             "regressor__mlp__learning_rate_init": [0.001, 0.01]
         }
@@ -291,7 +291,7 @@ models_config = {
         "params": {
             "regressor__cat__estimator__iterations": [100, 200, 500],
             "regressor__cat__estimator__learning_rate": [0.05, 0.1, 0.2],
-            "regressor__cat__estimator__depth": [3, 4, 5]
+            "regressor__cat__estimator__depth": [4, 6, 8]
         }
     },
     "KNN Regressor": {
@@ -463,7 +463,10 @@ elif "CatBoost" in best_model_name: fit_params_full['cat__sample_weight'] = full
 elif "Polynomial" in best_model_name: fit_params_full['ridge__sample_weight'] = full_df['Sample_Weight']
 best_model_overall.fit(X, Y, **fit_params_full)
 
-template_df = all_data[0].dropna(subset=['Time', 'Load', 'Temperature']).sort_values('Time')
+first_file_id = os.path.basename(xlsx_files[0])
+template_df = full_df[full_df['File_ID'] == first_file_id].copy()
+
+template_df = template_df.dropna(subset=['Time', 'Load', 'Temperature']).sort_values('Time')
 template_df = template_df[(template_df['Temperature'] != 0) & (template_df['Load'] != 0)]
 template_df = template_df[template_df['Time'] > 0]
 optimum_results = {}
@@ -576,7 +579,7 @@ else:
     doe_grid['Uncertainty_COF'] = std_cof
     doe_grid['Uncertainty_FAI'] = std_fai
     doe_grid['Distance'] = dist_metric
-    doe_grid['Score'] = 0.7 * avg_uncertainty + 0.3 * norm_dist
+    doe_grid['Score'] = config.UNCERTAINTY_WEIGHT * avg_uncertainty + config.SPARSITY_WEIGHT * norm_dist
 
     existing_set = set((round(row['Concentration'], 2), int(row['Load']), int(row['Temperature'])) for _, row in full_df[['Concentration', 'Load', 'Temperature']].iterrows())
     doe_candidates = doe_grid[~doe_grid.apply(lambda row: (round(row['Concentration'], 2), int(row['Load']), int(row['Temperature'])) in existing_set, axis=1)].sort_values(by='Score', ascending=False)
