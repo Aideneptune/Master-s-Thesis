@@ -1,4 +1,17 @@
 import os
+import numpy as np
+from sklearn.ensemble import RandomForestRegressor
+from xgboost import XGBRegressor
+from sklearn.linear_model import Ridge
+from sklearn.neural_network import MLPRegressor
+from sklearn.multioutput import MultiOutputRegressor
+from lightgbm import LGBMRegressor
+from catboost import CatBoostRegressor
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.compose import TransformedTargetRegressor
+from sklearn.pipeline import Pipeline
+from transformers import PandasStandardScaler
 
 # --- ELÉRÉSI UTAK ---
 # A projekt fő könyvtára
@@ -17,6 +30,12 @@ DOWNSAMPLING_RATE = 10
 ROLLING_WINDOW_SIZE = 20
 PREDICTION_LOWER_BOUND = 0.001
 PLOT_ESTERIFIED_STATE = 1  # 1 = Esterified, 0 = Base Oil
+
+# --- ÁBRÁK GLOBÁLIS BEÁLLÍTÁSAI ---
+PLOT_SETTINGS = {
+    'dpi': 300,
+    'cof_ylim': (0.0, 0.25)
+}
 
 # --- DOE BEÁLLÍTÁSOK ---
 UNCERTAINTY_WEIGHT = 0.7
@@ -65,5 +84,117 @@ IMAGE_DESCRIPTIONS = {
     "SHAP_Dependence_Load.png": "SHAP Dependence Plot for Load, colored by Esterified state.",
     "SHAP_Dependence_Temperature.png": "SHAP Dependence Plot for Temperature, colored by Esterified state.",
     "Optimum_comparison.png": "Direct comparison of optimum curves for base oil and esterified oil.",
-    "Pareto_Optimization.png": "Pareto front showing trade-offs between COF and FAI."
+    "Pareto_Optimization.png": "Pareto front showing trade-offs between COF and FAI.",
+    "residuals_best_model.png": "Residual plot of the best performing model showing the distribution of prediction errors."
+}
+
+# --- MODELLEK ÉS HIPERPARAMÉTER HÁLÓK (GRID) ---
+models_config = {
+    "XGBoost": {
+        "model": TransformedTargetRegressor(
+            regressor=Pipeline([
+                ('scaler', PandasStandardScaler()),
+                ('xgb', MultiOutputRegressor(XGBRegressor(objective='reg:squarederror', n_jobs=-1, random_state=RANDOM_SEED)))
+            ]),
+            func=np.log,
+            inverse_func=np.exp
+        ),
+        "params": {
+            "regressor__xgb__estimator__n_estimators": [50, 100, 150],
+            "regressor__xgb__estimator__learning_rate": [0.05, 0.1, 0.2],
+            "regressor__xgb__estimator__max_depth": [4, 6, 8],
+            "regressor__xgb__estimator__reg_alpha": [0, 0.1, 1],
+            "regressor__xgb__estimator__reg_lambda": [10, 50, 100]
+        }
+    },
+    "Neural Network (MLP)": {
+        "model": TransformedTargetRegressor(
+            regressor=Pipeline([
+                ('scaler', PandasStandardScaler()),
+                ('mlp', MLPRegressor(random_state=RANDOM_SEED, max_iter=500, early_stopping=True))
+            ]),
+            func=np.log,
+            inverse_func=np.exp
+        ),
+        "params": {
+            "regressor__mlp__hidden_layer_sizes": [(100, 50, 25), (64, 64, 64)],
+            "regressor__mlp__alpha": [1.0, 5.0, 10.0],
+            "regressor__mlp__activation": ['relu', 'tanh'],
+            "regressor__mlp__learning_rate_init": [0.001, 0.01]
+        }
+    },
+    "Random Forest": {
+        "model": TransformedTargetRegressor(
+            regressor=Pipeline([
+                ('scaler', PandasStandardScaler()),              # Skálázás Pandas kimenettel
+                ('rf', RandomForestRegressor(random_state=RANDOM_SEED, n_jobs=-1))
+            ]),
+            func=np.log,
+            inverse_func=np.exp
+        ),
+        "params": {
+            "regressor__rf__n_estimators": [100, 200, 300],
+            "regressor__rf__max_depth": [None, 10, 20],
+            "regressor__rf__min_samples_leaf": [5, 10, 20]
+        }
+    },
+    "LightGBM": {
+        "model": TransformedTargetRegressor(
+            regressor=Pipeline([
+                ('scaler', PandasStandardScaler()),
+                ('lgbm', MultiOutputRegressor(LGBMRegressor(random_state=RANDOM_SEED, n_jobs=-1, verbose=-1)))
+            ]),
+            func=np.log,
+            inverse_func=np.exp
+        ),
+        "params": {
+            "regressor__lgbm__estimator__n_estimators": [50, 100, 200],
+            "regressor__lgbm__estimator__learning_rate": [0.05, 0.1, 0.2],
+            "regressor__lgbm__estimator__max_depth": [3, 4, 5]
+        }
+    },
+    "CatBoost": {
+        "model": TransformedTargetRegressor(
+            regressor=Pipeline([
+                ('scaler', PandasStandardScaler()),
+                ('cat', MultiOutputRegressor(CatBoostRegressor(random_state=RANDOM_SEED, verbose=0, allow_writing_files=False)))
+            ]),
+            func=np.log,
+            inverse_func=np.exp
+        ),
+        "params": {
+            "regressor__cat__estimator__iterations": [100, 200, 500],
+            "regressor__cat__estimator__learning_rate": [0.05, 0.1, 0.2],
+            "regressor__cat__estimator__depth": [4, 6, 8],
+            "regressor__cat__estimator__l2_leaf_reg": [3, 5, 10]
+        }
+    },
+    "KNN Regressor": {
+        "model": TransformedTargetRegressor(
+            regressor=Pipeline([
+                ('scaler', PandasStandardScaler()),
+                ('knn', KNeighborsRegressor())
+            ]),
+            func=np.log,
+            inverse_func=np.exp
+        ),
+        "params": {
+            "regressor__knn__n_neighbors": [5, 10, 20],
+            "regressor__knn__weights": ['uniform']
+        }
+    },
+    "Polynomial Ridge Regression": {
+        "model": TransformedTargetRegressor(
+            regressor=Pipeline([
+                ('scaler', PandasStandardScaler()),
+                ('poly', PolynomialFeatures(degree=2, include_bias=False)),
+                ('ridge', Ridge())
+            ]),
+            func=np.log,
+            inverse_func=np.exp
+        ),
+        "params": {
+            "regressor__ridge__alpha": [0.1, 1.0, 10.0, 100.0]
+        }
+    }
 }
