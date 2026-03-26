@@ -1,5 +1,6 @@
 import os
 import numpy as np
+import matplotlib.pyplot as plt
 from sklearn.ensemble import RandomForestRegressor
 from xgboost import XGBRegressor
 from sklearn.linear_model import Ridge
@@ -41,6 +42,19 @@ PLOT_SETTINGS = {
 UNCERTAINTY_WEIGHT = 0.7
 SPARSITY_WEIGHT = 0.3
 
+# --- AKADÉMIAI ÁBRAFORMÁZÁS BEÁLLÍTÁSA ---
+def set_academic_plot_style():
+    plt.rcParams.update({
+        'font.family': 'sans-serif',
+        'font.sans-serif': ['Tahoma'],
+        'font.size': 11,
+        'axes.labelsize': 12,
+        'xtick.labelsize': 11,
+        'ytick.labelsize': 11,
+        'legend.fontsize': 11,
+        'figure.figsize': (6.3, 3.15)
+    })
+
 # --- MODELL TANÍTÁSI PARAMÉTEREK ---
 TEST_SIZE = 0.2
 CV_SPLITS = 5
@@ -54,12 +68,17 @@ TARGET_COLS = ['COF', 'Friction absolute integral']
 NAME_MAPPING = {
     'Log_Time': 'Logarithmic time',
     'Time_Squared': 'Squared time',
-    'Load_x_Temp': 'Load × Temperature',
-    'Load_x_Conc': 'Load × Concentration',
-    'Temp_x_Conc': 'Temperature × Concentration',
-    'Ester_x_Temp': 'Esterified × Temperature',
-    'Ester_x_Load': 'Esterified × Load',
-    'Ester_x_Conc': 'Esterified × Concentration',
+    'Load_x_Temperature': 'Load × Temperature',
+    'Load_x_Concentration': 'Load × Concentration',
+    'Temperature_x_Concentration': 'Temperature × Concentration',
+    'Esterified_x_Temperature': 'Esterified × Temperature',
+    'Esterified_x_Load': 'Esterified × Load',
+    'Esterified_x_Concentration': 'Esterified × Concentration',
+    'Load_div_Temperature': 'Load / Temperature',
+    'Concentration_div_Load': 'Concentration / Load',
+    'Temperature_div_Concentration': 'Temperature / Concentration',
+    'COF': 'Coefficient of Friction (COF) [-]',
+    'Friction absolute integral': 'Friction Absolute Integral (FAI) [-]',
     'Sample_Weight': 'Sample weight',
     'R2_Header': 'R² (Train / Test / CV)',
     'R2_Split_Header': 'R² (COF / FAI)',
@@ -75,6 +94,7 @@ NAME_MAPPING = {
 IMAGE_DESCRIPTIONS = {
     "Effect_of_noise_filtering.png": "Comparison of raw measurement data and the smoothed curve using rolling mean.",
     "3D_distribution_of_input_data.png": "Distribution of measurement points in the Load, Temperature, and Concentration space.",
+    "DoE_3D_map.png": "3D Map of Existing Data and DoE Suggestions.",
     "COF_heatmap.png": "Estimated static friction coefficient (COF) as a function of Load and Temperature.",
     "Correlation_matrix.png": "Strength of linear relationships between variables (Pearson correlation).",
     "Model_comparison.png": "Comparison of model accuracy (R2) and error (RMSE) on the test dataset.",
@@ -85,7 +105,11 @@ IMAGE_DESCRIPTIONS = {
     "SHAP_Dependence_Temperature.png": "SHAP Dependence Plot for Temperature, colored by Esterified state.",
     "Optimum_comparison.png": "Direct comparison of optimum curves for base oil and esterified oil.",
     "Pareto_Optimization.png": "Pareto front showing trade-offs between COF and FAI.",
-    "residuals_best_model.png": "Residual plot of the best performing model showing the distribution of prediction errors."
+    "Feature_importance.png": "Feature importance ranking for the best performing model.",
+    "residuals_best_model.png": "Residual plot of the best performing model showing the distribution of prediction errors.",
+    "Temperature_Trend_Analysis.png": "Effect of Temperature on the expected COF, comparing Esterified Oil with Base Oil.",
+    "Load_Trend_Analysis.png": "Effect of Load on the expected COF, comparing Esterified Oil with Base Oil.",
+    "Concentration_Trend_Analysis.png": "Effect of Concentration on the expected COF, comparing Esterified Oil with Base Oil."
 }
 
 # --- MODELLEK ÉS HIPERPARAMÉTER HÁLÓK (GRID) ---
