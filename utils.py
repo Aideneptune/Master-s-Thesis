@@ -76,7 +76,7 @@ def plot_pareto_front(results_dir, predictions, temperatures, title="Pareto fron
     else:
         knee_cof, knee_fai = pareto_cof[0], pareto_fai[0]
 
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(6.3, 3.15))
     plt.scatter(cof, fai, alpha=0.6, c=temperatures, cmap='plasma', label='Feasible operating points', s=10)
     plt.colorbar(label='Temperature [°C]')
     plt.plot(pareto_cof, pareto_fai, color='purple', marker='o', linewidth=2.5, label='Pareto front (Trade-off optimums)')
@@ -84,17 +84,15 @@ def plot_pareto_front(results_dir, predictions, temperatures, title="Pareto fron
     plt.annotate(f"Knee\n({knee_cof:.3f}, {knee_fai:.3f})", (knee_cof, knee_fai), xytext=(15, 15), textcoords='offset points', arrowprops=dict(arrowstyle="->", color='orange'))
     plt.xlabel('Coefficient of friction (COF) [-]')
     plt.ylabel('Friction Absolute Integral [-]')
-    plt.title(title)
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.4)
-    plt.savefig(os.path.join(results_dir, "Pareto_Optimization.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight')
-    plt.savefig(os.path.join(results_dir, "Pareto_Optimization.svg"), format='svg', bbox_inches='tight')
+    plt.savefig(os.path.join(results_dir, "Pareto_Optimization.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
+    plt.savefig(os.path.join(results_dir, "Pareto_Optimization.svg"), format='svg', bbox_inches='tight', pad_inches=0.1)
     plt.close()
 
-def plot_learning_curve(estimator, X, y, title="Learning curve", cv=None, n_jobs=-1, train_sizes=np.linspace(0.2, 1.0, 10), results_dir=".", groups=None, num_files=1):
+def plot_learning_curve(estimator, X, y, cv=None, n_jobs=-1, train_sizes=np.linspace(0.2, 1.0, 10), results_dir=".", groups=None, num_files=1):
     """Tanulási görbe generálása és mentése."""
-    plt.figure(figsize=(10, 6))
-    plt.title(title)
+    plt.figure(figsize=(6.3, 3.15))
     plt.xlabel("Number of training files/experiments")
     plt.ylabel(r"$R^2$ score")
 
@@ -119,14 +117,18 @@ def plot_learning_curve(estimator, X, y, title="Learning curve", cv=None, n_jobs
     plt.plot(train_sizes_files, test_scores_mean, 'o-', color="orange", linewidth=2.5, label="Cross-validation score")
     plt.ylim(max(0.0, np.min(test_scores_mean) - 0.1), 1.05)
     plt.legend(loc="best")
-    plt.savefig(os.path.join(results_dir, "Learning_Curve.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight')
-    plt.savefig(os.path.join(results_dir, "Learning_Curve.svg"), format='svg', bbox_inches='tight')
+    plt.savefig(os.path.join(results_dir, "Learning_Curve.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
+    plt.savefig(os.path.join(results_dir, "Learning_Curve.svg"), format='svg', bbox_inches='tight', pad_inches=0.1)
     plt.close()
 
-def generate_html_report(results, xlsx_files, full_df, desc_df, html_path, results_dir, doe_suggestions, optimum_results, shap_text="", timing_stats=None):
+def generate_html_report(results, xlsx_files, full_df, desc_df, html_path, results_dir, doe_suggestions, optimum_results, shap_text="", timing_stats=None, dynamic_descriptions=None):
     """HTML jelentés generálása a megadott PDF struktúra alapján."""
     sorted_results = sorted(results, key=lambda x: x['R2_Test'], reverse=True)
     best_model_res = sorted_results[0]
+    
+    desc_map = config.IMAGE_DESCRIPTIONS.copy()
+    if dynamic_descriptions:
+        desc_map.update(dynamic_descriptions)
     
     # CSS és Fejléc
     html_content = f"""<!DOCTYPE html>
@@ -160,7 +162,20 @@ def generate_html_report(results, xlsx_files, full_df, desc_df, html_path, resul
         <h1>Research results summary</h1>
         <p><strong>Generated:</strong> {time.strftime('%Y-%m-%d %H:%M:%S')}</p>
         
-        <h2>1. Settings and information</h2>
+        <div class="details-box" style="background-color: #f9f9f9;">
+            <h2>Table of Contents</h2>
+            <ul style="list-style-type: none; padding-left: 0;">
+                <li><a href="#sec1">1. Settings and information</a></li>
+                <li><a href="#sec2">2. Dataset descriptive statistics</a></li>
+                <li><a href="#sec3">3. Model results comparison</a></li>
+                <li><a href="#sec4">4. Detailed model results</a></li>
+                <li><a href="#sec5">5. Generated diagrams</a></li>
+                <li><a href="#sec6">6. Evaluation and Optimum Comparison</a></li>
+                <li><a href="#sec7">7. DoE Suggestions (New measurements)</a></li>
+            </ul>
+        </div>
+        
+        <h2 id="sec1">1. Settings and information</h2>
         <ul>
             <li><strong>Number of processed files:</strong> {len(xlsx_files)}</li>
             <li><strong>Dataset size:</strong> {len(full_df)} rows</li>
@@ -178,12 +193,12 @@ def generate_html_report(results, xlsx_files, full_df, desc_df, html_path, resul
     html_content += f"""
         </ul>
 
-        <h2>2. Dataset descriptive statistics</h2>
+        <h2 id="sec2">2. Dataset descriptive statistics</h2>
         <div style="overflow-x:auto;">
             {desc_df.to_html(classes='table', border=0, float_format=lambda x: '%.3f' % x)}
         </div>
 
-        <h2>3. Model results comparison</h2>
+        <h2 id="sec3">3. Model results comparison</h2>
         <div style="overflow-x:auto;">
             <table>
                 <thead>
@@ -235,7 +250,7 @@ def generate_html_report(results, xlsx_files, full_df, desc_df, html_path, resul
             </table>
         </div>
 
-        <h2>4. Detailed model results</h2>"""
+        <h2 id="sec4">4. Detailed model results</h2>"""
 
     for res in sorted_results:
         feat_imp_str = "N/A"
@@ -274,18 +289,21 @@ def generate_html_report(results, xlsx_files, full_df, desc_df, html_path, resul
                 <a href="{opt_curve_img}" target="_blank">
                     <img src="{opt_curve_img}" alt="{res['Name']} Optimum Curve" style="max-width:600px; margin-top:10px; border:1px solid #ccc;">
                 </a>
+                <p style="font-size: 0.9em; color: #666; font-style: italic;">{desc_map.get(opt_curve_img, '')}</p>
             </div>"""
 
         html_content += "</div>"
 
     html_content += """
-        <h2>5. Generated diagrams</h2>
+        <h2 id="sec5">5. Generated diagrams</h2>
         <div class="img-grid">"""
 
     png_files = sorted(glob.glob(os.path.join(results_dir, "*.png")))
     for png_path in png_files:
         filename = os.path.basename(png_path)
-        description = config.IMAGE_DESCRIPTIONS.get(filename, "Predicted curve or analysis plot.")
+        if "optimum_curve_" in filename:
+            continue
+        description = desc_map.get(filename, "Predicted curve or analysis plot.")
         
         html_content += f"""
             <div class="img-card">
@@ -299,7 +317,7 @@ def generate_html_report(results, xlsx_files, full_df, desc_df, html_path, resul
     html_content += f"""
         </div>
 
-        <h2>6. Evaluation and Optimum Comparison</h2>
+        <h2 id="sec6">6. Evaluation and Optimum Comparison</h2>
         <div class="details-box">
             <p>Based on the investigation, the best performing model is: <strong>{best_model_res['Name']}</strong>.</p>
             <ul>
@@ -350,7 +368,7 @@ def generate_html_report(results, xlsx_files, full_df, desc_df, html_path, resul
             </table>
         </div>
 
-        <h2>7. DoE Suggestions (New measurements)</h2>
+        <h2 id="sec7">7. DoE Suggestions (New measurements)</h2>
         <div class="details-box">
             <p>Suggestions are based on a combination of model uncertainty (Bagging variance) and distance from existing measurements (Sparsity). The goal is to investigate uncertain and unexplored areas.</p>
             <table>
