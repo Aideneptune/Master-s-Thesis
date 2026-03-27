@@ -81,7 +81,10 @@ def plot_pareto_front(results_dir, predictions, temperatures, title="Pareto fron
     plt.colorbar(label='Temperature [°C]')
     plt.plot(pareto_cof, pareto_fai, color='purple', marker='o', linewidth=2.5, label='Pareto front (Trade-off optimums)')
     plt.plot(knee_cof, knee_fai, color='orange', marker='o', markersize=10, label='Knee point (Best trade-off)', markeredgecolor='black')
-    plt.annotate(f"Knee\n({knee_cof:.3f}, {knee_fai:.3f})", (knee_cof, knee_fai), xytext=(15, 15), textcoords='offset points', arrowprops=dict(arrowstyle="->", color='orange'))
+    plt.annotate(f"Knee\n({knee_cof:.3f}, {knee_fai:.3f})", (knee_cof, knee_fai), 
+                 xytext=(15, 15), textcoords='offset points', 
+                 arrowprops=dict(arrowstyle="->", color='orange'),
+                 bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="black", lw=0.5, alpha=0.7))
     plt.xlabel('Coefficient of friction (COF) [-]')
     plt.ylabel('Friction Absolute Integral [-]')
     plt.legend()
@@ -329,7 +332,7 @@ def generate_html_report(results, xlsx_files, full_df, desc_df, html_path, resul
             
             {f'<div style="margin-top:15px; border-top:1px solid #ccc; padding-top:10px;"><strong>SHAP Analysis (Impact of Physical Parameters):</strong><br>{shap_text}</div>' if shap_text else ''}
             
-            <h3>Base Oil vs. Esterified Oil Optimums</h3>
+            <h3>Not esterified vs. Esterified Oil Optimums</h3>
             <table>
                 <thead>
                     <tr>
@@ -345,7 +348,7 @@ def generate_html_report(results, xlsx_files, full_df, desc_df, html_path, resul
                 </thead>
                 <tbody>
                     <tr>
-                        <td><strong>Base Oil (0)</strong></td>
+                        <td><strong>Not esterified (0)</strong></td>
                         <td>{optimum_results[0]['Conc']:.2f}</td>
                         <td>{int(optimum_results[0]['Load'])}</td>
                         <td>{int(optimum_results[0]['Temp'])}</td>
@@ -374,6 +377,7 @@ def generate_html_report(results, xlsx_files, full_df, desc_df, html_path, resul
             <table>
                 <thead>
                     <tr>
+                        <th>Oil Type</th>
                         <th>Concentration [%]</th>
                         <th>Load [N]</th>
                         <th>Temperature [°C]</th>
@@ -385,8 +389,10 @@ def generate_html_report(results, xlsx_files, full_df, desc_df, html_path, resul
                 <tbody>"""
                 
     for _, row in doe_suggestions.iterrows():
+        oil_type = "Esterified" if row['Esterified'] == 1 else "Not esterified"
         html_content += f"""
                     <tr>
+                        <td>{oil_type}</td>
                         <td>{row['Concentration']:.2f}</td>
                         <td>{int(row['Load'])}</td>
                         <td>{int(row['Temperature'])}</td>
