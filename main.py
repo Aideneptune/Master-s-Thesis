@@ -110,6 +110,20 @@ else:
                     plt.savefig(os.path.join(config.RESULTS_DIR, "Effect_of_noise_filtering.svg"), format='svg', bbox_inches='tight', pad_inches=0.1)
                     plt.close()
 
+                # Generate a second example plot from a different file
+                if len(all_data) == 49: # Corresponds to the 50th file (0-indexed)
+                    plt.figure(figsize=(6.3, 3.15))
+                    original_cof_50 = df['COF'].copy()
+                    plt.plot(df['Time'], original_cof_50, label='Eredeti jel (50. fájl)', color='silver', alpha=0.7)
+                    filtered_cof_50 = df['COF'].rolling(window=config.ROLLING_WINDOW_SIZE, min_periods=1, center=False).mean()
+                    plt.plot(df['Time'], filtered_cof_50, label='Filtered signal (Rolling Mean)', color='blue', linewidth=2.5)
+                    plt.xlabel("Time [s]")
+                    plt.ylabel("Coefficient of friction (COF) [-]")
+                    plt.legend()
+                    plt.grid(True, linestyle='--', alpha=0.4)
+                    plt.savefig(os.path.join(config.RESULTS_DIR, "Effect_of_noise_filtering_2.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
+                    plt.close()
+
                 all_data.append(df)
         except (FileNotFoundError, KeyError, ValueError) as e:
             print(f"Error: {os.path.basename(filepath)} - {e}")
@@ -293,7 +307,19 @@ else:
                     plot_filename = f"Optuna_Importances_{safe_model_name}.png"
                     fig = plt.gcf()
                     fig.set_size_inches(10, 6)
-                    plt.title(f"Hyperparameter Importances ({name})", fontsize=10)
+                    ax = plt.gca()
+                    ax.set_title("")
+                    plt.suptitle("")
+                    ticks = ax.get_yticks()
+                    labels = [tick.get_text() for tick in ax.get_yticklabels()]
+                    new_labels = []
+                    for raw_label in labels:
+                        parts = raw_label.split('__')
+                        short_name = parts[-1].replace('_', ' ').capitalize()
+                        new_labels.append(f"{short_name}\n({raw_label})")
+                    
+                    ax.set_yticks(ticks)
+                    ax.set_yticklabels(new_labels, multialignment='center')
                     plt.tight_layout()
                     plt.savefig(os.path.join(config.RESULTS_DIR, plot_filename), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
                     plt.close()
@@ -413,7 +439,7 @@ else:
         plt.grid(True, linestyle='--', alpha=0.4)
         safe_name = name.replace(' ', '_').replace('(', '').replace(')', '')
         curve_filename = f"optimum_curve_{safe_name}.png"
-        ester_text = "Esterified" if config.PLOT_ESTERIFIED_STATE == 1 else "Base Oil"
+        ester_text = "Esterified" if config.PLOT_ESTERIFIED_STATE == 1 else "Not esterified"
         dynamic_descriptions[curve_filename] = f"Optimum Curve - {name} ({opt_conc:.2f}% | {int(opt_load)}N | {int(opt_temp)}°C, {ester_text}). Run-in time: {run_in_model:.1f} s."
         plt.savefig(os.path.join(config.RESULTS_DIR, curve_filename), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
         plt.close()
@@ -515,7 +541,7 @@ else:
     plt.grid(True, linestyle='--', alpha=0.4)
     safe_name_ens = ensemble_name.replace(' ', '_').replace('(', '').replace(')', '')
     curve_filename_ens = f"optimum_curve_{safe_name_ens}.png"
-    ester_text_ens = "Esterified" if config.PLOT_ESTERIFIED_STATE == 1 else "Base Oil"
+    ester_text_ens = "Esterified" if config.PLOT_ESTERIFIED_STATE == 1 else "Not esterified"
     dynamic_descriptions[curve_filename_ens] = f"Optimum Curve - {ensemble_name} ({opt_conc_ens:.2f}% | {int(opt_load_ens)}N | {int(opt_temp_ens)}°C, {ester_text_ens}). Run-in time: {run_in_model_ens:.1f} s."
     plt.savefig(os.path.join(config.RESULTS_DIR, curve_filename_ens), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
     plt.close()
@@ -622,77 +648,86 @@ for ester_state in [0, 1]:
 
 # --- DoE Calculation ---
 print("\n--- DoE pontok számítása... ---")
-doe_cache_path = os.path.join(config.CACHE_DIR, "doe_cache.pkl")
-if config.USE_CACHE and os.path.exists(doe_cache_path):
-    print("\n--- Loading DoE Suggestions From Cache ---")
-    cached_doe = joblib.load(doe_cache_path)
-    doe_suggestions = cached_doe['doe_suggestions']
-    doe_duration = cached_doe['doe_duration']
-    print("DoE suggestions loaded from cache.")
-else:
-    print("\n--- Starting Design of Experiments (DoE) generation (Cache not found or disabled) ---")
-    start_doe = time.time()
+
+all_doe_suggestions = {}
+total_doe_duration = 0
+
+for ester_state_doe in [0, 1]:
+    state_str = "Esterified" if ester_state_doe == 1 else "Base Oil"
+    doe_cache_path = os.path.join(config.CACHE_DIR, f"doe_cache_{ester_state_doe}.pkl")
     
-    # Use top 3 models for uncertainty calculation
-    top3_doe_models = [r['Model'] for r in sorted(results, key=lambda x: x['R2_CV'], reverse=True)[:3]]
+    if config.USE_CACHE and os.path.exists(doe_cache_path):
+        print(f"\n--- Loading DoE Suggestions From Cache for {state_str} ---")
+        cached_doe = joblib.load(doe_cache_path)
+        doe_suggestions = cached_doe['doe_suggestions']
+        doe_duration = cached_doe['doe_duration']
+    else:
+        print(f"\n--- Starting DoE generation for {state_str} (Cache not found or disabled) ---")
+        start_doe = time.time()
+        
+        top3_doe_models = [r['Model'] for r in sorted(results, key=lambda x: x['R2_CV'], reverse=True)[:3]]
+        
+        doe_combos = list(itertools.product(range_conc, range_load, range_temp, [ester_state_doe]))
+        doe_grid_df = pd.DataFrame(doe_combos, columns=['Concentration', 'Load', 'Temperature', 'Esterified'])
+        doe_grid_df['Time'] = 7200
+        doe_grid_df = create_features(doe_grid_df)[X_cols_raw]
+        
+        grid_doe = global_vif.transform(global_interact.transform(doe_grid_df))
+
+        print("Predicting uncertainty on the parameter grid...")
+        doe_preds = np.array([np.maximum(model.predict(grid_doe), config.PREDICTION_LOWER_BOUND) for model in top3_doe_models])
+        std_cof = np.std(doe_preds[:, :, 0], axis=0)
+        std_fai = np.std(doe_preds[:, :, 1], axis=0)
+
+        doe_features = ['Concentration', 'Load', 'Temperature', 'Esterified']
+        scaler_doe = MinMaxScaler()
+        X_grid_scaled = pd.DataFrame(scaler_doe.fit_transform(doe_grid_df[doe_features]), columns=doe_features)
+        
+        existing_subset = full_df[full_df['Esterified'] == ester_state_doe]
+        X_existing_scaled = pd.DataFrame(scaler_doe.transform(existing_subset[doe_features]), columns=doe_features)
+
+        nbrs = NearestNeighbors(n_neighbors=1).fit(X_existing_scaled)
+        dist_metric = nbrs.kneighbors(X_grid_scaled)[0].flatten()
+
+        norm_std_cof = (std_cof - std_cof.min()) / (std_cof.max() - std_cof.min() + 1e-9)
+        norm_std_fai = (std_fai - std_fai.min()) / (std_fai.max() - std_fai.min() + 1e-9)
+        avg_uncertainty = (norm_std_cof + norm_std_fai) / 2
+        norm_dist = (dist_metric - dist_metric.min()) / (dist_metric.max() - dist_metric.min() + 1e-9)
+
+        doe_grid = doe_grid_df.copy()
+        doe_grid['Uncertainty_COF'] = std_cof
+        doe_grid['Uncertainty_FAI'] = std_fai
+        doe_grid['Distance'] = dist_metric
+        doe_grid['Score'] = config.UNCERTAINTY_WEIGHT * avg_uncertainty + config.SPARSITY_WEIGHT * norm_dist
+
+        existing_set = set((round(row['Concentration'], 2), int(row['Load']), int(row['Temperature']), int(row['Esterified'])) for _, row in existing_subset.iterrows())
+        doe_candidates = doe_grid[~doe_grid.apply(lambda row: (round(row['Concentration'], 2), int(row['Load']), int(row['Temperature']), int(row['Esterified'])) in existing_set, axis=1)].sort_values(by='Score', ascending=False)
+
+        final_suggestions = []
+        candidates_pool = doe_candidates.copy()
+        for _ in range(5):
+            if candidates_pool.empty: break
+            best_candidate = candidates_pool.iloc[0]
+            final_suggestions.append(best_candidate)
+            mask_load = (candidates_pool['Load'] >= best_candidate['Load'] - 20) & (candidates_pool['Load'] <= best_candidate['Load'] + 20)
+            mask_temp = (candidates_pool['Temperature'] >= best_candidate['Temperature'] - 10) & (candidates_pool['Temperature'] <= best_candidate['Temperature'] + 10)
+            mask_conc = (candidates_pool['Concentration'] >= best_candidate['Concentration'] - 0.1) & (candidates_pool['Concentration'] <= best_candidate['Concentration'] + 0.1)
+            candidates_pool.loc[mask_load & mask_temp & mask_conc, 'Score'] *= 0.5
+            candidates_pool = candidates_pool.drop(best_candidate.name).sort_values(by='Score', ascending=False)
+
+        doe_suggestions = pd.DataFrame(final_suggestions)
+        doe_duration = time.time() - start_doe
+
+        if config.USE_CACHE:
+            print(f"Saving DoE suggestions for {state_str} to cache...")
+            joblib.dump({'doe_suggestions': doe_suggestions, 'doe_duration': doe_duration}, doe_cache_path)
     
-    print("Building DoE grid (Esterified only)...")
-    doe_combos = list(itertools.product(range_conc, range_load, range_temp, [1]))
-    doe_grid_df = pd.DataFrame(doe_combos, columns=['Concentration', 'Load', 'Temperature', 'Esterified'])
-    doe_grid_df['Time'] = 7200
-    doe_grid_df = create_features(doe_grid_df)[X_cols_raw]
-    
-    grid_doe = global_vif.transform(global_interact.transform(doe_grid_df))
-
-    print("Predicting uncertainty on the parameter grid using top 3 models...")
-    doe_preds = np.array([np.maximum(model.predict(grid_doe), config.PREDICTION_LOWER_BOUND) for model in top3_doe_models])
-    std_cof = np.std(doe_preds[:, :, 0], axis=0)
-    std_fai = np.std(doe_preds[:, :, 1], axis=0)
-
-    doe_features = ['Concentration', 'Load', 'Temperature', 'Esterified']
-    scaler_doe = MinMaxScaler()
-    X_grid_scaled = pd.DataFrame(scaler_doe.fit_transform(doe_grid_df[doe_features]), columns=doe_features)
-    X_existing_scaled = pd.DataFrame(scaler_doe.transform(full_df[doe_features]), columns=doe_features)
-
-    nbrs = NearestNeighbors(n_neighbors=1).fit(X_existing_scaled)
-    dist_metric = nbrs.kneighbors(X_grid_scaled)[0].flatten()
-
-    norm_std_cof = (std_cof - std_cof.min()) / (std_cof.max() - std_cof.min() + 1e-9)
-    norm_std_fai = (std_fai - std_fai.min()) / (std_fai.max() - std_fai.min() + 1e-9)
-    avg_uncertainty = (norm_std_cof + norm_std_fai) / 2
-    norm_dist = (dist_metric - dist_metric.min()) / (dist_metric.max() - dist_metric.min() + 1e-9)
-
-    doe_grid = doe_grid_df.copy()
-    doe_grid['Uncertainty_COF'] = std_cof
-    doe_grid['Uncertainty_FAI'] = std_fai
-    doe_grid['Distance'] = dist_metric
-    doe_grid['Score'] = config.UNCERTAINTY_WEIGHT * avg_uncertainty + config.SPARSITY_WEIGHT * norm_dist
-
-    existing_set = set((round(row['Concentration'], 2), int(row['Load']), int(row['Temperature']), int(row['Esterified'])) for _, row in full_df[['Concentration', 'Load', 'Temperature', 'Esterified']].iterrows())
-    doe_candidates = doe_grid[~doe_grid.apply(lambda row: (round(row['Concentration'], 2), int(row['Load']), int(row['Temperature']), int(row['Esterified'])) in existing_set, axis=1)].sort_values(by='Score', ascending=False)
-
-    final_suggestions = []
-    candidates_pool = doe_candidates.copy()
-    for _ in range(5):
-        if candidates_pool.empty: break
-        best_candidate = candidates_pool.iloc[0]
-        final_suggestions.append(best_candidate)
-        mask_load = (candidates_pool['Load'] >= best_candidate['Load'] - 20) & (candidates_pool['Load'] <= best_candidate['Load'] + 20)
-        mask_temp = (candidates_pool['Temperature'] >= best_candidate['Temperature'] - 10) & (candidates_pool['Temperature'] <= best_candidate['Temperature'] + 10)
-        mask_conc = (candidates_pool['Concentration'] >= best_candidate['Concentration'] - 0.1) & (candidates_pool['Concentration'] <= best_candidate['Concentration'] + 0.1)
-        mask_ester = (candidates_pool['Esterified'] == best_candidate['Esterified'])
-        candidates_pool.loc[mask_load & mask_temp & mask_conc & mask_ester, 'Score'] *= 0.5
-        candidates_pool = candidates_pool.drop(best_candidate.name).sort_values(by='Score', ascending=False)
-
-    doe_suggestions = pd.DataFrame(final_suggestions)
-    doe_duration = time.time() - start_doe
-
-    if config.USE_CACHE:
-        print("Saving DoE suggestions to cache...")
-        joblib.dump({'doe_suggestions': doe_suggestions, 'doe_duration': doe_duration}, doe_cache_path)
+    all_doe_suggestions[ester_state_doe] = doe_suggestions
+    total_doe_duration += doe_duration
 
 doe_img_files = []
-for i, (_, row) in enumerate(doe_suggestions.iterrows()):
+doe_suggestions_combined = pd.concat(all_doe_suggestions.values()).reset_index(drop=True)
+for i, (_, row) in enumerate(doe_suggestions_combined.iterrows()):
     sim_input = create_features(pd.DataFrame({'Time': template_df['Time'], 'Load': row['Load'], 'Temperature': row['Temperature'], 'Concentration': row['Concentration'], 'Esterified': row['Esterified']}))[X_cols_raw]
     sim_input_trans = global_vif.transform(global_interact.transform(sim_input))
     curve_preds = np.maximum(best_model_overall.predict(sim_input_trans), config.PREDICTION_LOWER_BOUND)
@@ -704,12 +739,11 @@ for i, (_, row) in enumerate(doe_suggestions.iterrows()):
     plt.xlabel('Time [s]')
     plt.ylabel('Coefficient of friction (COF) [-]')
     fname = f"DoE_Suggestion_{i+1}.png"
-    ester_str = "Esterified" if row['Esterified'] == 1 else "Base Oil"
+    ester_str = "Esterified" if row['Esterified'] == 1 else "Not esterified"
     dynamic_descriptions[fname] = f"DoE suggestion #{i+1}: {row['Concentration']:.2f}% | {int(row['Load'])}N | {int(row['Temperature'])}°C | {ester_str} (Predicted by: {best_model_name})."
     plt.savefig(os.path.join(config.RESULTS_DIR, fname), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
     plt.close()
     doe_img_files.append(fname)
-doe_suggestions['Image_File'] = doe_img_files
 
 print("\n--- Generating Feature Importance Plot ---")
 best_res = next(r for r in results if r['Name'] == best_model_name)
@@ -811,11 +845,11 @@ plt.close()
 
 print("\n--- Generating Evaluation Plots ---")
 plt.figure(figsize=(6.3, 3.15))
-plt.plot(optimum_results[0]['CurveTime'], optimum_results[0]['CurveCOF'], color='purple', label="Base Oil")
+plt.plot(optimum_results[0]['CurveTime'], optimum_results[0]['CurveCOF'], color='purple', label="Not esterified")
 plt.plot(optimum_results[1]['CurveTime'], optimum_results[1]['CurveCOF'], color='orange', label="Esterified")
 plt.ylim(config.PLOT_SETTINGS['cof_ylim'])
 if optimum_results[0]['RunIn'] > 0:
-    plt.axvline(x=optimum_results[0]['RunIn'], color='purple', linestyle='--', alpha=0.5, label='Run-in (Base Oil)')
+    plt.axvline(x=optimum_results[0]['RunIn'], color='purple', linestyle='--', alpha=0.5, label='Run-in (Not esterified)')
 if optimum_results[1]['RunIn'] > 0:
     plt.axvline(x=optimum_results[1]['RunIn'], color='orange', linestyle='--', alpha=0.5, label='Run-in (Esterified)')
 plt.legend()
@@ -837,7 +871,7 @@ preds_base = np.maximum(best_model_overall.predict(trend_base_trans), config.PRE
 preds_ester = np.maximum(best_model_overall.predict(trend_ester_trans), config.PREDICTION_LOWER_BOUND)[:, 0]
 
 fig, ax = plt.subplots(figsize=(6.3, 3.15))
-plt.plot(trend_temp_range, preds_base, marker='o', color='purple', label='Base Oil (0)', linewidth=2.5)
+plt.plot(trend_temp_range, preds_base, marker='o', color='purple', label='Not esterified (0)', linewidth=2.5)
 plt.plot(trend_temp_range, preds_ester, marker='s', color='orange', label='Esterified Oil (1)', linewidth=2.5)
 plt.fill_between(trend_temp_range, preds_base, preds_ester, color='grey', alpha=0.2, label='Ester Advantage')
 plt.xlabel("Temperature [°C]")
@@ -865,7 +899,7 @@ preds_base_load = np.maximum(best_model_overall.predict(trend_base_trans_load), 
 preds_ester_load = np.maximum(best_model_overall.predict(trend_ester_trans_load), config.PREDICTION_LOWER_BOUND)[:, 0]
 
 fig, ax = plt.subplots(figsize=(6.3, 3.15))
-plt.plot(trend_load_range, preds_base_load, marker='o', color='purple', label='Base Oil (0)', linewidth=2.5)
+plt.plot(trend_load_range, preds_base_load, marker='o', color='purple', label='Not esterified (0)', linewidth=2.5)
 plt.plot(trend_load_range, preds_ester_load, marker='s', color='orange', label='Esterified Oil (1)', linewidth=2.5)
 plt.fill_between(trend_load_range, preds_base_load, preds_ester_load, color='grey', alpha=0.2, label='Ester Advantage')
 plt.xlabel("Load [N]")
@@ -893,7 +927,7 @@ preds_base_conc = np.maximum(best_model_overall.predict(trend_base_trans_conc), 
 preds_ester_conc = np.maximum(best_model_overall.predict(trend_ester_trans_conc), config.PREDICTION_LOWER_BOUND)[:, 0]
 
 fig, ax = plt.subplots(figsize=(6.3, 3.15))
-plt.plot(trend_conc_range, preds_base_conc, marker='o', color='purple', label='Base Oil (0)', linewidth=2.5)
+plt.plot(trend_conc_range, preds_base_conc, marker='o', color='purple', label='Not esterified (0)', linewidth=2.5)
 plt.plot(trend_conc_range, preds_ester_conc, marker='s', color='orange', label='Esterified Oil (1)', linewidth=2.5)
 plt.fill_between(trend_conc_range, preds_base_conc, preds_ester_conc, color='grey', alpha=0.2, label='Ester Advantage')
 plt.xlabel("Concentration [wt%]")
@@ -917,38 +951,37 @@ ax.tick_params(axis='both', which='major', labelsize=9)
 
 custom_lines = [Line2D([0], [0], marker='o', color='w', markerfacecolor='blue', markersize=10),
                 Line2D([0], [0], marker='o', color='w', markerfacecolor='red', markersize=10)]
-ax.legend(custom_lines, ['Base Oil (0)', 'Esterified (1)'], loc='upper left', bbox_to_anchor=(1.05, 1))
+ax.legend(custom_lines, ['Not esterified (0)', 'Esterified (1)'], loc='upper left', bbox_to_anchor=(1.05, 1))
 plt.savefig(os.path.join(config.RESULTS_DIR, "3D_distribution_of_input_data.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
 plt.close()
 
-fig = plt.figure(figsize=(12, 10))
-ax = fig.add_subplot(111, projection='3d')
-ax.scatter(full_df['Load'], full_df['Temperature'], full_df['Concentration'], 
-           c='blue', marker='o', s=15, alpha=0.5, label='Existing Measurements')
-ax.scatter(doe_suggestions['Load'], doe_suggestions['Temperature'], doe_suggestions['Concentration'], 
-           c='red', s=800, alpha=0.2, label='DoE Space Coverage')
-ax.scatter(doe_suggestions['Load'], doe_suggestions['Temperature'], doe_suggestions['Concentration'], 
-           c='red', marker='x', s=50, label='DoE Points')
+for ester_state_plot, suggestions in all_doe_suggestions.items():
+    if suggestions.empty:
+        continue
 
-# Segédvonalak (stems) és feliratok generálása a DoE pontokhoz
-for _, row in doe_suggestions.iterrows():
-    # Függőleges vonal az XY síkig (Concentration = 0)
-    ax.plot([row['Load'], row['Load']], [row['Temperature'], row['Temperature']], [0, row['Concentration']], color='red', linestyle='--', linewidth=1.5, alpha=0.6)
-    # Vízszintes vonalak a tengelyekhez az XY síkon
-    ax.plot([10, row['Load']], [row['Temperature'], row['Temperature']], [0, 0], color='gray', linestyle=':', linewidth=1.0, alpha=0.5)
-    ax.plot([row['Load'], row['Load']], [40, row['Temperature']], [0, 0], color='gray', linestyle=':', linewidth=1.0, alpha=0.5)
+    state_str = "Esterified" if ester_state_plot == 1 else "NotEsterified"
+    title_str = "Esterified" if ester_state_plot == 1 else "Not esterified"
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5), sharey=False)
+    fig.suptitle(f'2D Projections of DoE Suggestions - {title_str}', fontsize=16)
+
+    projections = [('Load', 'Temperature'), ('Load', 'Concentration'), ('Temperature', 'Concentration')]
     
-    ax.text(row['Load'], row['Temperature'], row['Concentration'] + 0.03, # Nagyobb függőleges eltolás
-            f" C: {row['Concentration']:.2f}\n L: {int(row['Load'])}N\n T: {int(row['Temperature'])}°C",
-            color='black', fontsize=9, ha='left', va='bottom',
-            bbox=dict(facecolor='white', alpha=0.9, edgecolor='red', boxstyle='round,pad=0.4'))
-ax.set_xlabel('Load [N]', labelpad=10)
-ax.set_ylabel('Temperature [°C]', labelpad=10)
-ax.set_zlabel('Concentration [wt%]', labelpad=10)
-ax.tick_params(axis='both', which='major', labelsize=10)
-plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=11, markerscale=0.5)
-plt.savefig(os.path.join(config.RESULTS_DIR, "DoE_3D_map.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
-plt.close()
+    existing_data_subset = full_df[full_df['Esterified'] == ester_state_plot]
+
+    for i, (x_ax, y_ax) in enumerate(projections):
+        axes[i].scatter(existing_data_subset[x_ax], existing_data_subset[y_ax], c='grey', alpha=0.3, s=20, label='Existing Measurements')
+        axes[i].scatter(suggestions[x_ax], suggestions[y_ax], c='red', marker='o', s=100, label='DoE Suggestions', edgecolors='black')
+        
+        axes[i].set_xlabel(f'{x_ax} [{config.NAME_MAPPING.get(x_ax, "wt%")}]')
+        axes[i].set_ylabel(f'{y_ax} [{config.NAME_MAPPING.get(y_ax, "°C" if "Temp" in y_ax else "N")}]')
+        axes[i].grid(True, linestyle='--', alpha=0.6)
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 0.95), ncol=2, fontsize=12)
+
+    plt.tight_layout(rect=[0, 0, 1, 0.9])
+    plt.savefig(os.path.join(config.RESULTS_DIR, f"DoE_2D_Projections_{state_str}.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
+    plt.close()
 
 L_grid, T_grid = np.meshgrid(np.linspace(10, 200, 100), np.linspace(40, 120, 100))
 heatmap_input = create_features(pd.DataFrame({'Time': 7200, 'Load': L_grid.ravel(), 'Temperature': T_grid.ravel(), 'Concentration': opt_conc, 'Esterified': config.PLOT_ESTERIFIED_STATE}))[X_cols_raw]
@@ -971,11 +1004,12 @@ corr_labels = ['Time', 'Load', 'Temperature', 'Concentration', 'Esterified', 'CO
 corr_matrix = full_df[corr_cols].corr()
 im = plt.imshow(corr_matrix, cmap='coolwarm', interpolation='nearest', vmin=-1, vmax=1)
 plt.colorbar(im)
+plt.grid(False)
 for i in range(len(corr_matrix.columns)):
     for j in range(len(corr_matrix.columns)):
-        plt.text(j, i, f"{corr_matrix.iloc[i, j]:.2f}", ha="center", va="center", color="white" if abs(corr_matrix.iloc[i, j]) > 0.5 else "black", fontsize=8)
-plt.xticks(range(len(corr_labels)), corr_labels, rotation=45, ha='right')
-plt.yticks(range(len(corr_labels)), corr_labels)
+        plt.text(j, i, f"{corr_matrix.iloc[i, j]:.2f}", ha="center", va="center", color="white" if abs(corr_matrix.iloc[i, j]) > 0.5 else "black", fontsize=10)
+plt.xticks(range(len(corr_labels)), corr_labels, rotation=45, ha='right', fontsize=12)
+plt.yticks(range(len(corr_labels)), corr_labels, fontsize=12)
 plt.tight_layout()
 plt.savefig(os.path.join(config.RESULTS_DIR, "Correlation_matrix.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
 plt.close()
@@ -992,9 +1026,9 @@ timing_stats = {
     'total': format_time(time.time() - script_start), 
     'loading': format_time(loading_duration), 
     'shap': format_time(shap_duration) if shap_duration is not None else "N/A", 
-    'doe': format_time(doe_duration)
+    'doe': format_time(total_doe_duration)
 }
-html_content = generate_html_report(results, xlsx_files, full_df, desc_df, html_path, config.RESULTS_DIR, doe_suggestions, optimum_results, shap_analysis_text, timing_stats, dynamic_descriptions)
+html_content = generate_html_report(results, xlsx_files, full_df, desc_df, html_path, config.RESULTS_DIR, doe_suggestions_combined, optimum_results, shap_analysis_text, timing_stats, dynamic_descriptions)
 
 with open(html_path, "w", encoding="utf-8") as f:
     f.write(html_content)
@@ -1002,9 +1036,9 @@ with open(html_path, "w", encoding="utf-8") as f:
 excel_path = os.path.join(config.RESULTS_DIR, "Results_Tables.xlsx")
 with pd.ExcelWriter(excel_path) as writer:
     pd.DataFrame(results)[['Name', 'R2_Train', 'R2_Test', 'R2_CV', 'RMSE_Train', 'RMSE_Test', 'MAE_Test', 'Tuning_Training_Time', 'Pred_Time_ms']].to_excel(writer, sheet_name='Model_Metrics', index=False)
-    opt_data = [{'Type': 'Esterified' if s == 1 else 'Base Oil', **r} for s, r in optimum_results.items()]
+    opt_data = [{'Type': 'Esterified' if s == 1 else 'Not esterified', **r} for s, r in optimum_results.items()]
     pd.DataFrame(opt_data).drop(columns=['CurveTime', 'CurveCOF']).to_excel(writer, sheet_name='Optimums', index=False)
-    doe_suggestions.drop(columns=['Image_File']).to_excel(writer, sheet_name='DoE_Suggestions', index=False)
+    doe_suggestions_combined.to_excel(writer, sheet_name='DoE_Suggestions', index=False)
 
 joblib.dump(best_model_overall, os.path.join(config.RESULTS_DIR, f"Best_Model_{best_model_name.replace(' ', '_')}.pkl"))
 print("\nPipeline completed successfully! Opening HTML report...")
