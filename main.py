@@ -6,7 +6,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.lines import Line2D
-from matplotlib.ticker import FuncFormatter
+from matplotlib.ticker import FuncFormatter, MaxNLocator
 import glob
 import os
 import joblib
@@ -17,7 +17,7 @@ from tqdm import tqdm
 from sklearn.ensemble import RandomForestRegressor, BaggingRegressor
 import optuna
 from sklearn.ensemble import VotingRegressor
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LinearRegression, Ridge
 from sklearn.neighbors import NearestNeighbors
 from sklearn.model_selection import StratifiedShuffleSplit, RandomizedSearchCV, cross_validate, GroupKFold, ShuffleSplit, GroupShuffleSplit
 from sklearn.preprocessing import MinMaxScaler
@@ -86,7 +86,7 @@ else:
             
             df = df.dropna(subset=['Concentration', 'COF', 'Friction absolute integral', 'Load', 'Temperature'])
             df = df[(df['Temperature'] != 0) & (df['Load'] != 0)]
-            # df = df[df['Time'] > 10.0] # Kezdeti vágás (Hard Trim): első 10 mp eldobása - Visszaállítva a korábbi állapotra
+            df = df[df['Time'] > 60.0]
             df = df.reset_index(drop=True)
             df = df.groupby(df.index // config.DOWNSAMPLING_RATE).mean(numeric_only=True).reset_index(drop=True)
             df['File_ID'] = os.path.basename(filepath)
@@ -101,11 +101,12 @@ else:
 
                 df['COF'] = df['COF'].rolling(window=config.ROLLING_WINDOW_SIZE, min_periods=1, center=False).mean() # Visszaállítva a korábbi rolling mean-re
                 if len(all_data) == 0:
-                    plt.plot(df['Time'], df['COF'], label='Filtered signal (Rolling Mean)', color='orange', linewidth=2.5) # Visszaállítva a korábbi label-re
+                    plt.plot(df['Time'], df['COF'], label='Filtered signal (Rolling Mean)', color='orange') # Visszaállítva a korábbi label-re
                     plt.xlabel("Time [s]")
                     plt.ylabel("Coefficient of friction (COF) [-]")
-                    plt.legend()
-                    plt.grid(True, linestyle='--', alpha=0.4)
+                    ymin, ymax = plt.gca().get_ylim()
+                    plt.ylim(ymin, ymax + (ymax - ymin) * 0.35)
+                    plt.legend(loc='upper right')
                     plt.savefig(os.path.join(config.RESULTS_DIR, "Effect_of_noise_filtering.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
                     plt.savefig(os.path.join(config.RESULTS_DIR, "Effect_of_noise_filtering.svg"), format='svg', bbox_inches='tight', pad_inches=0.1)
                     plt.close()
@@ -116,11 +117,12 @@ else:
                     original_cof_50 = df['COF'].copy()
                     plt.plot(df['Time'], original_cof_50, label='Eredeti jel (50. fájl)', color='silver', alpha=0.7)
                     filtered_cof_50 = df['COF'].rolling(window=config.ROLLING_WINDOW_SIZE, min_periods=1, center=False).mean()
-                    plt.plot(df['Time'], filtered_cof_50, label='Filtered signal (Rolling Mean)', color='blue', linewidth=2.5)
+                    plt.plot(df['Time'], filtered_cof_50, label='Filtered signal (Rolling Mean)', color='blue')
                     plt.xlabel("Time [s]")
                     plt.ylabel("Coefficient of friction (COF) [-]")
-                    plt.legend()
-                    plt.grid(True, linestyle='--', alpha=0.4)
+                    ymin, ymax = plt.gca().get_ylim()
+                    plt.ylim(ymin, ymax + (ymax - ymin) * 0.35)
+                    plt.legend(loc='upper right')
                     plt.savefig(os.path.join(config.RESULTS_DIR, "Effect_of_noise_filtering_2.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
                     plt.close()
 
@@ -226,39 +228,46 @@ template_df = template_df.dropna(subset=['Time', 'Load', 'Temperature']).sort_va
 template_df = template_df[(template_df['Temperature'] != 0) & (template_df['Load'] != 0)]
 template_df = template_df[template_df['Time'] > 0]
 
-class PreFittedVotingRegressor(BaseEstimator, TransformerMixin):
-    def __init__(self, estimators, names):
+# --- Custom Classes ---
+class PreFittedStackingRegressor(BaseEstimator, TransformerMixin):
+    """
+    Egyedi Stacking modell, amely támogatja a többdimenziós kimenetet (MultiOutput),
+    és nem dobja el a már előre betanított bázismodelleket.
+    """
+    def __init__(self, estimators, final_estimator):
         self.estimators = estimators
-        self.names = names
+        self.final_estimator = final_estimator
         
     def fit(self, X, y, **fit_params):
-        for name, est in zip(self.names, self.estimators):
-            fparams = {}
-            if "Random Forest" in name: fparams['rf__sample_weight'] = fit_params.get('sample_weight')
-            elif "XGBoost" in name: fparams['xgb__sample_weight'] = fit_params.get('sample_weight')
-            elif "LightGBM" in name: fparams['lgbm__sample_weight'] = fit_params.get('sample_weight')
-            elif "CatBoost" in name: fparams['cat__sample_weight'] = fit_params.get('sample_weight')
-            elif "Polynomial" in name: fparams['ridge__sample_weight'] = fit_params.get('sample_weight')
-            fparams = {k: v for k, v in fparams.items() if v is not None}
-            est.fit(X, y, **fparams)
+        X_meta = np.column_stack([model.predict(X) for name, model in self.estimators])
+        self.final_estimator.fit(X_meta, y, **fit_params)
         return self
         
     def predict(self, X):
-        return np.mean([est.predict(X) for est in self.estimators], axis=0)
+        X_meta = np.column_stack([model.predict(X) for name, model in self.estimators])
+        return self.final_estimator.predict(X_meta)
 
 # --- Model Training ---
 print("\n--- Modellek betanítása és tuningolása... ---")
 models_cache_path = os.path.join(config.CACHE_DIR, "models_cache.pkl")
 if config.USE_CACHE and os.path.exists(models_cache_path):
     print("\n--- Loading Trained Models From Cache ---")
-    cached_models = joblib.load(models_cache_path)
-    results = cached_models['results']
-    best_model_overall = cached_models['best_model_overall']
-    best_model_name = cached_models['best_model_name']
-    best_r2_overall = max(r['R2_CV'] for r in results)
-    print("Models loaded from cache.")
+    try:
+        cached_models = joblib.load(models_cache_path)
+        results = cached_models['results']
+        best_model_overall = cached_models['best_model_overall']
+        best_model_name = cached_models['best_model_name']
+        best_r2_overall = max(r['R2_CV'] for r in results)
+        print("Models loaded from cache.")
+        models_loaded = True
+    except Exception as e:
+        print(f"Warning: Could not load cache ({e}). Forcing retraining...")
+        models_loaded = False
 else:
-    print("\n--- Training Models (Cache not found or disabled) ---")
+    models_loaded = False
+
+if not models_loaded:
+    print("\n--- Training Models (Cache not found, disabled, or invalid) ---")
     results = []
     best_model_overall = None
     best_r2_overall = -np.inf
@@ -293,8 +302,8 @@ else:
                     print(f"  Trial failed: {e}")
                     return -100.0
 
+            study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=config.RANDOM_SEED))
             optuna.logging.set_verbosity(optuna.logging.WARNING)
-            study = optuna.create_study(direction="maximize")
             def logging_callback(study, frozen_trial):
                 print(f"  Trial {frozen_trial.number} finished with R2 CV: {frozen_trial.value:.4f} | Best so far: {study.best_value:.4f} (Trial {study.best_trial.number})")
             study.optimize(objective, n_trials=50, callbacks=[logging_callback])
@@ -307,7 +316,10 @@ else:
                     plot_filename = f"Optuna_Importances_{safe_model_name}.png"
                     fig = plt.gcf()
                     fig.set_size_inches(10, 6)
+                    fig.set_facecolor('white')
                     ax = plt.gca()
+                    ax.set_facecolor('white')
+                    ax.grid(False)
                     ax.set_title("")
                     plt.suptitle("")
                     ticks = ax.get_yticks()
@@ -326,6 +338,8 @@ else:
                     dynamic_descriptions[plot_filename] = f"Optuna Hyperparameter Importances for {name}."
             except Exception as e:
                 print(f"  Could not generate Optuna plot for {name}: {e}")
+
+            config.set_academic_plot_style()
 
             best_params_raw = study.best_params
             best_params = {}
@@ -427,16 +441,17 @@ else:
 
         # Generate Plot
         fig, ax = plt.subplots(figsize=(6.3, 3.15))
-        plt.plot(curve_time_model, curve_cof_model, label=f'Optimized (Esterified={config.PLOT_ESTERIFIED_STATE})', color='orange', linewidth=2.5)
-        plt.plot(curve_time_model, curve_cof_base, label='Base Oil (Esterified=0)', color='purple', linewidth=2, linestyle='--')
+        plt.plot(curve_time_model, curve_cof_model, label=f'Optimized (Esterified={config.PLOT_ESTERIFIED_STATE})', color='orange')
+        plt.plot(curve_time_model, curve_cof_base, label='Base Oil (Esterified=0)', color='purple', linestyle='--')
         plt.ylim(config.PLOT_SETTINGS['cof_ylim'])
         if run_in_model > 0:
             plt.axvline(x=run_in_model, color='grey', linestyle='--', label='Run-in time')
         ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{y:g}'))
         plt.xlabel('Time [s]')
         plt.ylabel('Coefficient of friction (COF) [-]')
-        plt.legend()
-        plt.grid(True, linestyle='--', alpha=0.4)
+        ymin, ymax = plt.gca().get_ylim()
+        plt.ylim(ymin, ymax + (ymax - ymin) * 0.35)
+        plt.legend(loc='upper right')
         safe_name = name.replace(' ', '_').replace('(', '').replace(')', '')
         curve_filename = f"optimum_curve_{safe_name}.png"
         ester_text = "Esterified" if config.PLOT_ESTERIFIED_STATE == 1 else "Not esterified"
@@ -458,16 +473,24 @@ else:
             best_model_overall = best_estimator
             best_model_name = name
 
-    # --- Creating Ensemble (Top 3 Voting) ---
-    print("\n--- Creating Ensemble (Top 3 Voting) ---")
+    # --- Creating Ensemble (Top 3 Stacking) ---
+    print("\n--- Creating Ensemble (Top 3 Stacking) ---")
 
     top3_results = sorted(results, key=lambda x: x['R2_CV'], reverse=True)[:3]
     top3_models = [r['Model'] for r in top3_results]
     top3_names = [r['Name'] for r in top3_results]
     print(f"Top 3 models selected for ensemble: {', '.join(top3_names)}")
     
-    ensemble_name = "Ensemble (Top 3 Voting)"
-    ensemble_model = PreFittedVotingRegressor(top3_models, top3_names)
+    ensemble_name = "Ensemble (Top 3 Stacking)"
+    estimators_list = [(name, model) for name, model in zip(top3_names, top3_models)]
+
+    ensemble_model = PreFittedStackingRegressor(
+        estimators=estimators_list,
+        final_estimator=Ridge(alpha=1.0)
+    )
+    
+    # A Ridge meta-modell betanítása a szisztematikus hiba korrigálására
+    ensemble_model.fit(X_train, y_train)
     
     start_pred = time.time()
     y_pred_ens = np.maximum(ensemble_model.predict(X_test), config.PREDICTION_LOWER_BOUND)
@@ -529,16 +552,17 @@ else:
     run_in_model_ens = curve_time_model_ens[outside_model_ens[-1]] if len(outside_model_ens) > 0 else 0
 
     fig, ax = plt.subplots(figsize=(6.3, 3.15))
-    plt.plot(curve_time_model_ens, curve_cof_model_ens, label=f'Optimized (Esterified={config.PLOT_ESTERIFIED_STATE})', color='orange', linewidth=2.5)
-    plt.plot(curve_time_model_ens, curve_cof_base_ens, label='Base Oil (Esterified=0)', color='purple', linewidth=2, linestyle='--')
+    plt.plot(curve_time_model_ens, curve_cof_model_ens, label=f'Optimized (Esterified={config.PLOT_ESTERIFIED_STATE})', color='orange')
+    plt.plot(curve_time_model_ens, curve_cof_base_ens, label='Base Oil (Esterified=0)', color='purple', linestyle='--')
     plt.ylim(config.PLOT_SETTINGS['cof_ylim'])
     if run_in_model_ens > 0:
         plt.axvline(x=run_in_model_ens, color='grey', linestyle='--', label='Run-in time')
     ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{y:g}'))
     plt.xlabel('Time [s]')
     plt.ylabel('Coefficient of friction (COF) [-]')
-    plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.4)
+    ymin, ymax = plt.gca().get_ylim()
+    plt.ylim(ymin, ymax + (ymax - ymin) * 0.35)
+    plt.legend(loc='upper right')
     safe_name_ens = ensemble_name.replace(' ', '_').replace('(', '').replace(')', '')
     curve_filename_ens = f"optimum_curve_{safe_name_ens}.png"
     ester_text_ens = "Esterified" if config.PLOT_ESTERIFIED_STATE == 1 else "Not esterified"
@@ -551,7 +575,7 @@ else:
         "RMSE_Train": rmse_train_ens, "RMSE_Test": rmse_test_ens, "RMSE_COF": rmse_cof_ens, "RMSE_FAI": rmse_fai_ens, "MAE_Test": mae_test_ens,
         "Tuning_Training_Time": tuning_training_time_ens, "Pred_Time_ms": pred_time_ms_ens, "Feature_Imp": None,
         "Opt_Conc": opt_conc_ens, "Opt_Load": opt_load_ens, "Opt_Temp": opt_temp_ens, "Pred_COF": pred_cof_5m_ens, "Pred_FAI": pred_fai_5m_ens,
-        "Best_Params": f"Voting of: {', '.join(top3_names)}", "Selected_Features": global_vif.selected_features_,
+        "Best_Params": f"Stacking of: {', '.join(top3_names)}", "Selected_Features": global_vif.selected_features_,
         "RunIn_Time": run_in_model_ens, "Opt_Curve_File": curve_filename_ens
     })
 
@@ -732,10 +756,9 @@ for i, (_, row) in enumerate(doe_suggestions_combined.iterrows()):
     sim_input_trans = global_vif.transform(global_interact.transform(sim_input))
     curve_preds = np.maximum(best_model_overall.predict(sim_input_trans), config.PREDICTION_LOWER_BOUND)
     fig, ax = plt.subplots(figsize=(6.3, 3.15))
-    plt.plot(template_df['Time'], curve_preds[:, 0], color='purple', linewidth=2.5)
+    plt.plot(template_df['Time'], curve_preds[:, 0], color='purple')
     plt.ylim(bottom=0.0, top=0.3)
     ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{y:g}'))
-    plt.grid(True, linestyle='--', alpha=0.4)
     plt.xlabel('Time [s]')
     plt.ylabel('Coefficient of friction (COF) [-]')
     fname = f"DoE_Suggestion_{i+1}.png"
@@ -816,8 +839,14 @@ if tree_results:
 
             plt.figure(figsize=(6.3, 3.15))
             shap.summary_plot(shap_values_to_plot, X_test_display, show=False)
+            fig = plt.gcf()
+            fig.set_facecolor('white')
+            ax = plt.gca()
+            ax.set_facecolor('white')
+            ax.grid(False)
             plt.savefig(os.path.join(config.RESULTS_DIR, "SHAP_feature_impact.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
             plt.close()
+            config.set_academic_plot_style() # Visszaállítjuk a stílust a SHAP után
             
             mean_shap = np.abs(shap_values_to_plot).mean(axis=0)
             top_3 = sorted(dict(zip(X_test_display.columns, mean_shap)).items(), key=lambda x: x[1], reverse=True)[:3]
@@ -837,7 +866,6 @@ plt.scatter(y_test['COF'].values, residuals, alpha=0.6, color='blue', edgecolors
 plt.axhline(0, color='black', linestyle='--', linewidth=2)
 plt.xlabel("Actual COF")
 plt.ylabel("Residual Error")
-plt.grid(True, linestyle='--', alpha=0.4)
 ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{y:g}'))
 dynamic_descriptions["residuals_best_model.png"] = f"Residual Plot - {best_model_name} (COF)."
 plt.savefig(os.path.join(config.RESULTS_DIR, "residuals_best_model.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
@@ -852,14 +880,16 @@ if optimum_results[0]['RunIn'] > 0:
     plt.axvline(x=optimum_results[0]['RunIn'], color='purple', linestyle='--', alpha=0.5, label='Run-in (Not esterified)')
 if optimum_results[1]['RunIn'] > 0:
     plt.axvline(x=optimum_results[1]['RunIn'], color='orange', linestyle='--', alpha=0.5, label='Run-in (Esterified)')
-plt.legend()
+ymin, ymax = plt.gca().get_ylim()
+plt.ylim(ymin, ymax + (ymax - ymin) * 0.35)
+plt.legend(loc='upper right')
 plt.savefig(os.path.join(config.RESULTS_DIR, "Optimum_comparison.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
 plt.close()
 
 print("\n--- Generating Trend Analysis Plot (Temperature vs COF) ---")
 trend_temp_range = np.linspace(40, 120, 20)
-trend_df_base = pd.DataFrame({'Time': 7200, 'Load': opt_load, 'Temperature': trend_temp_range, 'Concentration': opt_conc, 'Esterified': 0})
-trend_df_ester = pd.DataFrame({'Time': 7200, 'Load': opt_load, 'Temperature': trend_temp_range, 'Concentration': opt_conc, 'Esterified': config.PLOT_ESTERIFIED_STATE})
+trend_df_base = pd.DataFrame({'Time': 7200, 'Load': 100, 'Temperature': trend_temp_range, 'Concentration': 0.5, 'Esterified': 0})
+trend_df_ester = pd.DataFrame({'Time': 7200, 'Load': 100, 'Temperature': trend_temp_range, 'Concentration': 0.5, 'Esterified': config.PLOT_ESTERIFIED_STATE})
 
 trend_df_base = create_features(trend_df_base)[X_cols_raw]
 trend_df_ester = create_features(trend_df_ester)[X_cols_raw]
@@ -871,23 +901,62 @@ preds_base = np.maximum(best_model_overall.predict(trend_base_trans), config.PRE
 preds_ester = np.maximum(best_model_overall.predict(trend_ester_trans), config.PREDICTION_LOWER_BOUND)[:, 0]
 
 fig, ax = plt.subplots(figsize=(6.3, 3.15))
-plt.plot(trend_temp_range, preds_base, marker='o', color='purple', label='Not esterified (0)', linewidth=2.5)
-plt.plot(trend_temp_range, preds_ester, marker='s', color='orange', label='Esterified Oil (1)', linewidth=2.5)
+plt.plot(trend_temp_range, preds_base, marker='o', color='purple', label='Not esterified (0)')
+plt.plot(trend_temp_range, preds_ester, marker='s', color='orange', label='Esterified Oil (1)')
 plt.fill_between(trend_temp_range, preds_base, preds_ester, color='grey', alpha=0.2, label='Ester Advantage')
 plt.xlabel("Temperature [°C]")
 plt.ylabel("Expected COF [-]")
-plt.legend()
-plt.grid(True, linestyle='--', alpha=0.4)
+ymin, ymax = ax.get_ylim()
+ax.set_ylim(ymin, ymax + (ymax - ymin) * 0.35)
+plt.legend(loc='upper right')
+ymin, ymax = ax.get_ylim()
+ax.set_ylim(ymin, ymax + (ymax - ymin) * 0.35)
+plt.legend(loc='upper right')
+ymin, ymax = ax.get_ylim()
+ax.set_ylim(ymin, ymax + (ymax - ymin) * 0.35)
+plt.legend(loc='upper right')
 ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{y:g}'))
-dynamic_descriptions["Temperature_Trend_Analysis.png"] = f"Temperature Trend Analysis (Load: {int(opt_load)}N, Conc: {opt_conc:.2f}%)."
+dynamic_descriptions["Temperature_Trend_Analysis.png"] = "Temperature Trend Analysis (Load: 100N, Conc: 0.50wt%)."
 plt.savefig(os.path.join(config.RESULTS_DIR, "Temperature_Trend_Analysis.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
+plt.close()
+
+# Concentration Trend Analysis 2 (170N, 80°C)
+print("\n--- Generating Trend Analysis Plot (Concentration vs COF) [170N, 80°C] ---")
+trend_conc_range = np.linspace(0, 0.6, 20)
+trend_df_base_conc_2 = pd.DataFrame({'Time': 7200, 'Load': 170, 'Temperature': 80, 'Concentration': trend_conc_range, 'Esterified': 0})
+trend_df_ester_conc_2 = pd.DataFrame({'Time': 7200, 'Load': 170, 'Temperature': 80, 'Concentration': trend_conc_range, 'Esterified': config.PLOT_ESTERIFIED_STATE})
+
+trend_df_base_conc_2 = create_features(trend_df_base_conc_2)[X_cols_raw]
+trend_df_ester_conc_2 = create_features(trend_df_ester_conc_2)[X_cols_raw]
+
+trend_base_trans_conc_2 = global_vif.transform(global_interact.transform(trend_df_base_conc_2))
+trend_ester_trans_conc_2 = global_vif.transform(global_interact.transform(trend_df_ester_conc_2))
+
+preds_base_conc_2 = np.maximum(best_model_overall.predict(trend_base_trans_conc_2), config.PREDICTION_LOWER_BOUND)[:, 0]
+preds_ester_conc_2 = np.maximum(best_model_overall.predict(trend_ester_trans_conc_2), config.PREDICTION_LOWER_BOUND)[:, 0]
+
+fig, ax = plt.subplots(figsize=(6.3, 3.15))
+plt.plot(trend_conc_range, preds_base_conc_2, marker='o', color='purple', label='Not esterified (0)')
+plt.plot(trend_conc_range, preds_ester_conc_2, marker='s', color='orange', label='Esterified Oil (1)')
+plt.fill_between(trend_conc_range, preds_base_conc_2, preds_ester_conc_2, color='grey', alpha=0.2, label='Ester Advantage')
+plt.xlabel("Concentration [wt%]")
+plt.ylabel("Expected COF [-]")
+
+ymin, ymax = ax.get_ylim()
+ax.set_ylim(ymin, ymax + (ymax - ymin) * 0.35)
+plt.legend(loc='upper right')
+
+ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{y:g}'))
+ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f'{x:g}'))
+dynamic_descriptions["Concentration_Trend_Analysis_2.png"] = "Concentration Trend Analysis (Load: 170N, Temp: 80°C)."
+plt.savefig(os.path.join(config.RESULTS_DIR, "Concentration_Trend_Analysis_2.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
 plt.close()
 
 # Load Trend Analysis
 print("\n--- Generating Trend Analysis Plot (Load vs COF) ---")
 trend_load_range = np.linspace(10, 200, 20)
-trend_df_base_load = pd.DataFrame({'Time': 7200, 'Load': trend_load_range, 'Temperature': opt_temp, 'Concentration': opt_conc, 'Esterified': 0})
-trend_df_ester_load = pd.DataFrame({'Time': 7200, 'Load': trend_load_range, 'Temperature': opt_temp, 'Concentration': opt_conc, 'Esterified': config.PLOT_ESTERIFIED_STATE})
+trend_df_base_load = pd.DataFrame({'Time': 7200, 'Load': trend_load_range, 'Temperature': 100, 'Concentration': 0.5, 'Esterified': 0})
+trend_df_ester_load = pd.DataFrame({'Time': 7200, 'Load': trend_load_range, 'Temperature': 100, 'Concentration': 0.5, 'Esterified': config.PLOT_ESTERIFIED_STATE})
 
 trend_df_base_load = create_features(trend_df_base_load)[X_cols_raw]
 trend_df_ester_load = create_features(trend_df_ester_load)[X_cols_raw]
@@ -899,23 +968,21 @@ preds_base_load = np.maximum(best_model_overall.predict(trend_base_trans_load), 
 preds_ester_load = np.maximum(best_model_overall.predict(trend_ester_trans_load), config.PREDICTION_LOWER_BOUND)[:, 0]
 
 fig, ax = plt.subplots(figsize=(6.3, 3.15))
-plt.plot(trend_load_range, preds_base_load, marker='o', color='purple', label='Not esterified (0)', linewidth=2.5)
-plt.plot(trend_load_range, preds_ester_load, marker='s', color='orange', label='Esterified Oil (1)', linewidth=2.5)
+plt.plot(trend_load_range, preds_base_load, marker='o', color='purple', label='Not esterified (0)')
+plt.plot(trend_load_range, preds_ester_load, marker='s', color='orange', label='Esterified Oil (1)')
 plt.fill_between(trend_load_range, preds_base_load, preds_ester_load, color='grey', alpha=0.2, label='Ester Advantage')
 plt.xlabel("Load [N]")
 plt.ylabel("Expected COF [-]")
 plt.legend()
-plt.grid(True, linestyle='--', alpha=0.4)
 ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{y:g}'))
-dynamic_descriptions["Load_Trend_Analysis.png"] = f"Load Trend Analysis (Temp: {int(opt_temp)}°C, Conc: {opt_conc:.2f}%)."
+dynamic_descriptions["Load_Trend_Analysis.png"] = "Load Trend Analysis (Temp: 100°C, Conc: 0.50wt%)."
 plt.savefig(os.path.join(config.RESULTS_DIR, "Load_Trend_Analysis.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
 plt.close()
 
 # Concentration Trend Analysis
 print("\n--- Generating Trend Analysis Plot (Concentration vs COF) ---")
-trend_conc_range = np.linspace(0, 0.6, 20)
-trend_df_base_conc = pd.DataFrame({'Time': 7200, 'Load': opt_load, 'Temperature': opt_temp, 'Concentration': trend_conc_range, 'Esterified': 0})
-trend_df_ester_conc = pd.DataFrame({'Time': 7200, 'Load': opt_load, 'Temperature': opt_temp, 'Concentration': trend_conc_range, 'Esterified': config.PLOT_ESTERIFIED_STATE})
+trend_df_base_conc = pd.DataFrame({'Time': 7200, 'Load': 100, 'Temperature': 100, 'Concentration': trend_conc_range, 'Esterified': 0})
+trend_df_ester_conc = pd.DataFrame({'Time': 7200, 'Load': 100, 'Temperature': 100, 'Concentration': trend_conc_range, 'Esterified': config.PLOT_ESTERIFIED_STATE})
 
 trend_df_base_conc = create_features(trend_df_base_conc)[X_cols_raw]
 trend_df_ester_conc = create_features(trend_df_ester_conc)[X_cols_raw]
@@ -927,31 +994,45 @@ preds_base_conc = np.maximum(best_model_overall.predict(trend_base_trans_conc), 
 preds_ester_conc = np.maximum(best_model_overall.predict(trend_ester_trans_conc), config.PREDICTION_LOWER_BOUND)[:, 0]
 
 fig, ax = plt.subplots(figsize=(6.3, 3.15))
-plt.plot(trend_conc_range, preds_base_conc, marker='o', color='purple', label='Not esterified (0)', linewidth=2.5)
-plt.plot(trend_conc_range, preds_ester_conc, marker='s', color='orange', label='Esterified Oil (1)', linewidth=2.5)
+plt.plot(trend_conc_range, preds_base_conc, marker='o', color='purple', label='Not esterified (0)')
+plt.plot(trend_conc_range, preds_ester_conc, marker='s', color='orange', label='Esterified Oil (1)')
 plt.fill_between(trend_conc_range, preds_base_conc, preds_ester_conc, color='grey', alpha=0.2, label='Ester Advantage')
 plt.xlabel("Concentration [wt%]")
 plt.ylabel("Expected COF [-]")
 plt.legend()
-plt.grid(True, linestyle='--', alpha=0.4)
 ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{y:g}'))
 ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f'{x:g}'))
-dynamic_descriptions["Concentration_Trend_Analysis.png"] = f"Concentration Trend Analysis (Load: {int(opt_load)}N, Temp: {int(opt_temp)}°C)."
+dynamic_descriptions["Concentration_Trend_Analysis.png"] = "Concentration Trend Analysis (Load: 100N, Temp: 100°C)."
 plt.savefig(os.path.join(config.RESULTS_DIR, "Concentration_Trend_Analysis.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
 plt.close()
 
 fig = plt.figure(figsize=(10, 8))
 ax = fig.add_subplot(111, projection='3d')
-subset = full_df.groupby(['Load', 'Temperature', 'Concentration', 'Esterified'])['File_ID'].nunique().reset_index(name='Count')
-ax.scatter(subset['Load'], subset['Temperature'], subset['Concentration'], c=subset['Esterified'], cmap='coolwarm', s=subset['Count']*100, alpha=0.6)
+ax.xaxis.pane.fill = False
+ax.yaxis.pane.fill = False
+ax.zaxis.pane.fill = False
+ax.xaxis.pane.set_edgecolor('black')
+ax.yaxis.pane.set_edgecolor('black')
+ax.zaxis.pane.set_edgecolor('black')
+ax.xaxis.line.set_color('black')
+ax.yaxis.line.set_color('black')
+ax.zaxis.line.set_color('black')
+ax.grid(True, linestyle='--')
+ax.xaxis.set_major_locator(MaxNLocator(nbins=5))
+ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
+ax.zaxis.set_major_locator(MaxNLocator(nbins=5))
+subset = full_df.groupby(['Load', 'Temperature', 'Concentration']).agg({'Esterified': lambda x: 'red' if len(set(x)) > 1 else ('orange' if list(x)[0] == 1 else 'purple'), 'File_ID': 'nunique'}).reset_index()
+subset.rename(columns={'Esterified': 'Color', 'File_ID': 'Count'}, inplace=True)
+ax.scatter(subset['Load'], subset['Temperature'], subset['Concentration'], c=subset['Color'], s=subset['Count']*100, alpha=0.6, edgecolors='black', linewidth=0.5)
 ax.set_xlabel('Load [N]', labelpad=10)
 ax.set_ylabel('Temperature [°C]', labelpad=10)
 ax.set_zlabel('Concentration [wt%]', labelpad=10)
 ax.tick_params(axis='both', which='major', labelsize=9)
 
-custom_lines = [Line2D([0], [0], marker='o', color='w', markerfacecolor='blue', markersize=10),
+custom_lines = [Line2D([0], [0], marker='o', color='w', markerfacecolor='purple', markersize=10),
+                Line2D([0], [0], marker='o', color='w', markerfacecolor='orange', markersize=10),
                 Line2D([0], [0], marker='o', color='w', markerfacecolor='red', markersize=10)]
-ax.legend(custom_lines, ['Not esterified (0)', 'Esterified (1)'], loc='upper left', bbox_to_anchor=(1.05, 1))
+ax.legend(custom_lines, ['Not esterified (0)', 'Esterified (1)', 'Both (0 & 1)'], loc='upper left', bbox_to_anchor=(1.05, 1))
 plt.savefig(os.path.join(config.RESULTS_DIR, "3D_distribution_of_input_data.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
 plt.close()
 
@@ -974,7 +1055,6 @@ for ester_state_plot, suggestions in all_doe_suggestions.items():
         
         axes[i].set_xlabel(f'{x_ax} [{config.NAME_MAPPING.get(x_ax, "wt%")}]')
         axes[i].set_ylabel(f'{y_ax} [{config.NAME_MAPPING.get(y_ax, "°C" if "Temp" in y_ax else "N")}]')
-        axes[i].grid(True, linestyle='--', alpha=0.6)
 
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 0.95), ncol=2, fontsize=12)
@@ -1018,9 +1098,41 @@ plot_learning_curve(best_model_overall, X, Y, cv=GroupShuffleSplit(n_splits=conf
 dynamic_descriptions["Learning_Curve.png"] = f"Learning curve ({best_model_name})."
 
 html_path = os.path.join(config.RESULTS_DIR, "Eredmenyek_Riport.html")
+
+last_5m_mask = full_df['Time'] >= full_df.groupby('File_ID')['Time'].transform('max') - 300
+file_means = full_df[last_5m_mask].groupby('File_ID')[['COF', 'Friction absolute integral']].mean()
+file_means['Esterified'] = full_df.groupby('File_ID')['Esterified'].first()
+
+file_means_desc = file_means[['COF', 'Friction absolute integral']].describe()
+file_means_desc.columns = ['Last 5m Avg COF', 'Last 5m Avg FAI']
+file_means_desc.index = ['Count', 'Mean', 'Std', 'Min', '25%', '50% (Median)', '75%', 'Max']
+
+# --- Generate Boxplot for Last 5m Avg COF ---
+data_0 = file_means[file_means['Esterified'] == 0]['COF'].dropna().values
+data_1 = file_means[file_means['Esterified'] == 1]['COF'].dropna().values
+
+if len(data_0) > 0 and len(data_1) > 0:
+    fig, ax = plt.subplots(figsize=(6.3, 3.15))
+    bplot = ax.boxplot([data_0, data_1], positions=[0, 1], patch_artist=True, widths=0.4,
+                       medianprops=dict(color='black', linewidth=1.5))
+    
+    for patch, color in zip(bplot['boxes'], ['purple', 'orange']):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.6)
+        
+    ax.set_xticks([0, 1])
+    ax.set_xticklabels(['Not esterified (0)', 'Esterified (1)'])
+    ax.set_ylabel('Last 5m Avg COF [-]')
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{y:g}'))
+    
+    dynamic_descriptions["Last_5m_COF_Distribution.png"] = "Boxplot distribution of the stabilized COF values (average of the last 5 minutes) comparing Base Oil and Esterified Oil."
+    plt.savefig(os.path.join(config.RESULTS_DIR, "Last_5m_COF_Distribution.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
+    plt.close()
+
 desc_df = full_df[['Time', 'Load', 'Temperature', 'Concentration', 'Esterified', 'COF', 'Friction absolute integral']].describe()
 desc_df.index = ['Count', 'Mean', 'Std', 'Min', '25%', '50% (Median)', '75%', 'Max']
 desc_df.rename(columns=config.NAME_MAPPING, inplace=True)
+desc_df = pd.concat([desc_df, file_means_desc], axis=1)
 
 timing_stats = {
     'total': format_time(time.time() - script_start), 
