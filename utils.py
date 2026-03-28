@@ -79,7 +79,7 @@ def plot_pareto_front(results_dir, predictions, temperatures, title="Pareto fron
     plt.figure(figsize=(6.3, 3.15))
     plt.scatter(cof, fai, alpha=0.6, c=temperatures, cmap='plasma', label='Feasible operating points', s=10)
     plt.colorbar(label='Temperature [°C]')
-    plt.plot(pareto_cof, pareto_fai, color='purple', marker='o', linewidth=2.5, label='Pareto front (Trade-off optimums)')
+    plt.plot(pareto_cof, pareto_fai, color='purple', marker='o', label='Pareto front (Trade-off optimums)')
     plt.plot(knee_cof, knee_fai, color='orange', marker='o', markersize=10, label='Knee point (Best trade-off)', markeredgecolor='black')
     plt.annotate(f"Knee\n({knee_cof:.3f}, {knee_fai:.3f})", (knee_cof, knee_fai), 
                  xytext=(15, 15), textcoords='offset points', 
@@ -87,8 +87,9 @@ def plot_pareto_front(results_dir, predictions, temperatures, title="Pareto fron
                  bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="black", lw=0.5, alpha=0.7))
     plt.xlabel('Coefficient of friction (COF) [-]')
     plt.ylabel('Friction Absolute Integral [-]')
-    plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.4)
+    ymin, ymax = plt.gca().get_ylim()
+    plt.ylim(ymin, ymax + (ymax - ymin) * 0.35)
+    plt.legend(loc='upper right')
     plt.savefig(os.path.join(results_dir, "Pareto_Optimization.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
     plt.savefig(os.path.join(results_dir, "Pareto_Optimization.svg"), format='svg', bbox_inches='tight', pad_inches=0.1)
     plt.close()
@@ -111,15 +112,14 @@ def plot_learning_curve(estimator, X, y, cv=None, n_jobs=-1, train_sizes=np.lins
     avg_samples_per_file = len(X) / num_files
     train_sizes_files = train_sizes / avg_samples_per_file
 
-    plt.grid(True, linestyle='--', alpha=0.4)
     plt.fill_between(train_sizes_files, train_scores_mean - train_scores_std,
                      train_scores_mean + train_scores_std, alpha=0.1, color="purple")
     plt.fill_between(train_sizes_files, test_scores_mean - test_scores_std,
                      test_scores_mean + test_scores_std, alpha=0.1, color="orange")
-    plt.plot(train_sizes_files, train_scores_mean, 'o-', color="purple", linewidth=2.5, label="Training score")
-    plt.plot(train_sizes_files, test_scores_mean, 'o-', color="orange", linewidth=2.5, label="Cross-validation score")
-    plt.ylim(max(0.0, np.min(test_scores_mean) - 0.1), 1.05)
-    plt.legend(loc="best")
+    plt.plot(train_sizes_files, train_scores_mean, 'o-', color="purple", label="Training score")
+    plt.plot(train_sizes_files, test_scores_mean, 'o-', color="orange", label="Cross-validation score")
+    plt.ylim(max(0.0, np.min(test_scores_mean) - 0.1), 1.25) # Extrában megemelve
+    plt.legend(loc="upper right")
     plt.savefig(os.path.join(results_dir, "Learning_Curve.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
     plt.savefig(os.path.join(results_dir, "Learning_Curve.svg"), format='svg', bbox_inches='tight', pad_inches=0.1)
     plt.close()
