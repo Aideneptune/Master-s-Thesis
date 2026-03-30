@@ -154,11 +154,11 @@ models_config = {
             inverse_func=np.exp
         ),
         "params": {
-            "regressor__xgb__estimator__n_estimators": [50, 100, 150],
+            "regressor__xgb__estimator__n_estimators": [100, 300],
             "regressor__xgb__estimator__learning_rate": [0.05, 0.1, 0.2],
-            "regressor__xgb__estimator__max_depth": [2, 3, 4],
-            "regressor__xgb__estimator__reg_alpha": [1, 5, 10],
-            "regressor__xgb__estimator__reg_lambda": [5, 10, 20]
+            "regressor__xgb__estimator__max_depth": [6, 12],
+            "regressor__xgb__estimator__reg_alpha": [0, 1, 5],
+            "regressor__xgb__estimator__reg_lambda": [1, 5, 10]
         }
     },
     "Neural Network (MLP)": {
@@ -172,9 +172,10 @@ models_config = {
         ),
         "params": {
             "regressor__mlp__hidden_layer_sizes": [(50,), (50, 25)],
-            "regressor__mlp__alpha": [5.0, 10.0, 20.0],
+            "regressor__mlp__alpha": [1.0, 5.0, 10.0],
             "regressor__mlp__activation": ['relu', 'tanh'],
             "regressor__mlp__learning_rate_init": [0.001, 0.01]
+
         }
     },
     "Random Forest": {
@@ -187,9 +188,9 @@ models_config = {
             inverse_func=np.exp
         ),
         "params": {
-            "regressor__rf__n_estimators": [100, 200, 300],
-            "regressor__rf__max_depth": [5, 10, 15],
-            "regressor__rf__min_samples_leaf": [10, 20, 50]
+            "regressor__rf__n_estimators": [100, 300],
+            "regressor__rf__max_depth": [10, 20],
+            "regressor__rf__min_samples_leaf": [2, 5, 10]
         }
     },
     "LightGBM": {
@@ -202,10 +203,10 @@ models_config = {
             inverse_func=np.exp
         ),
         "params": {
-            "regressor__lgbm__estimator__n_estimators": [50, 100, 200],
+            "regressor__lgbm__estimator__n_estimators": [100, 300],
             "regressor__lgbm__estimator__learning_rate": [0.05, 0.1, 0.2],
-            "regressor__lgbm__estimator__max_depth": [2, 3, 4],
-            "regressor__lgbm__estimator__reg_lambda": [5, 10, 20]
+            "regressor__lgbm__estimator__max_depth": [6, 15],
+            "regressor__lgbm__estimator__reg_lambda": [1, 5, 10]
         }
     },
     "CatBoost": {
@@ -218,9 +219,9 @@ models_config = {
             inverse_func=np.exp
         ),
         "params": {
-            "regressor__cat__estimator__iterations": [100, 200, 500],
+            "regressor__cat__estimator__iterations": [100, 300],
             "regressor__cat__estimator__learning_rate": [0.05, 0.1, 0.2],
-            "regressor__cat__estimator__depth": [2, 3, 4],
+            "regressor__cat__estimator__depth": [6, 10],
             "regressor__cat__estimator__l2_leaf_reg": [10, 20, 50]
         }
     },
@@ -234,7 +235,7 @@ models_config = {
             inverse_func=np.exp
         ),
         "params": {
-            "regressor__knn__n_neighbors": [10, 20, 50],
+            "regressor__knn__n_neighbors": [5, 10, 15],
             "regressor__knn__weights": ['uniform']
         }
     },
