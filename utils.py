@@ -158,6 +158,15 @@ def generate_html_report(results, xlsx_files, full_df, desc_df, html_path, resul
         li {{ margin-bottom: 5px; }}
         .feat-table {{ width: auto; margin-top: 10px; }}
         .feat-table th, .feat-table td {{ padding: 4px 12px; }}
+        .export-btn {{ padding: 10px 20px; font-size: 16px; cursor: pointer; background-color: #4CAF50; color: white; border: none; border-radius: 5px; margin-bottom: 20px; }}
+        .export-btn:hover {{ background-color: #45a049; }}
+        @media print {{
+            .no-print {{ display: none !important; }}
+            div {{ overflow: visible !important; max-height: none !important; }}
+            table {{ page-break-inside: auto; width: 100%; font-size: 9pt; }}
+            tr {{ page-break-inside: avoid; page-break-after: auto; }}
+            body {{ padding: 0; }}
+        }}
     </style>
 </head>
 <body>
@@ -176,6 +185,10 @@ def generate_html_report(results, xlsx_files, full_df, desc_df, html_path, resul
                 <li><a href="#sec6">6. Evaluation and Optimum Comparison</a></li>
                 <li><a href="#sec7">7. DoE Suggestions (New measurements)</a></li>
             </ul>
+        </div>
+        
+        <div class="footer no-print" style="margin-top: 20px;">
+            <button class="export-btn" onclick="window.print()">Export / Print to PDF</button>
         </div>
         
         <h2 id="sec1">1. Settings and information</h2>
