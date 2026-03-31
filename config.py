@@ -84,7 +84,7 @@ def set_academic_plot_style():
 
 # --- MODELL TANÍTÁSI PARAMÉTEREK ---
 TEST_SIZE = 0.2
-CV_SPLITS = 10
+CV_SPLITS = 5
 SEARCH_ITERATIONS = 50
 
 # --- OSZLOPNEVEK ---
@@ -156,9 +156,9 @@ models_config = {
         "params": {
             "regressor__xgb__estimator__n_estimators": [100, 300],
             "regressor__xgb__estimator__learning_rate": [0.05, 0.1, 0.2],
-            "regressor__xgb__estimator__max_depth": [6, 12],
+            "regressor__xgb__estimator__max_depth": [5, 10],
             "regressor__xgb__estimator__reg_alpha": [0, 1, 5],
-            "regressor__xgb__estimator__reg_lambda": [1, 5, 10]
+            "regressor__xgb__estimator__reg_lambda": [5.0, 20.0]
         }
     },
     "Neural Network (MLP)": {
@@ -189,8 +189,8 @@ models_config = {
         ),
         "params": {
             "regressor__rf__n_estimators": [100, 300],
-            "regressor__rf__max_depth": [10, 20],
-            "regressor__rf__min_samples_leaf": [2, 5, 10]
+            "regressor__rf__max_depth": [8, 15],
+            "regressor__rf__min_samples_leaf": [5, 15]
         }
     },
     "LightGBM": {
@@ -205,8 +205,8 @@ models_config = {
         "params": {
             "regressor__lgbm__estimator__n_estimators": [100, 300],
             "regressor__lgbm__estimator__learning_rate": [0.05, 0.1, 0.2],
-            "regressor__lgbm__estimator__max_depth": [6, 15],
-            "regressor__lgbm__estimator__reg_lambda": [1, 5, 10]
+            "regressor__lgbm__estimator__max_depth": [5, 10],
+            "regressor__lgbm__estimator__reg_lambda": [5.0, 20.0]
         }
     },
     "CatBoost": {
@@ -221,8 +221,8 @@ models_config = {
         "params": {
             "regressor__cat__estimator__iterations": [100, 300],
             "regressor__cat__estimator__learning_rate": [0.05, 0.1, 0.2],
-            "regressor__cat__estimator__depth": [6, 10],
-            "regressor__cat__estimator__l2_leaf_reg": [10, 20, 50]
+            "regressor__cat__estimator__depth": [5, 8],
+            "regressor__cat__estimator__l2_leaf_reg": [10, 50]
         }
     },
     "KNN Regressor": {
