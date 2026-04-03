@@ -32,6 +32,11 @@ ROLLING_WINDOW_SIZE = 20
 PREDICTION_LOWER_BOUND = 0.001
 PLOT_ESTERIFIED_STATE = 1  # 1 = Esterified, 0 = Base Oil
 
+# --- FIZIKAI ÁLLANDÓK (HERTZ-FESZÜLTSÉG) ---
+E_MODULUS = 210000.0  # Rugalmassági modulusz [MPa]
+POISSON_RATIO = 0.3   # Poisson-tényező [-]
+BALL_RADIUS = 5.0     # Golyó sugara [mm]
+
 # --- ÁBRÁK GLOBÁLIS BEÁLLÍTÁSAI ---
 PLOT_SETTINGS = {
     'dpi': 300,
@@ -88,7 +93,7 @@ CV_SPLITS = 5
 SEARCH_ITERATIONS = 50
 
 # --- OSZLOPNEVEK ---
-FEATURE_COLS = ['Time', 'Log_Time', 'Time_Squared', 'Load', 'Temperature', 'Concentration', 'Esterified']
+FEATURE_COLS = ['Time', 'Log_Time', 'Time_Squared', 'Load', 'Temperature', 'Concentration', 'Esterified', 'Hertz_Stress_MPa']
 TARGET_COLS = ['COF', 'Friction absolute integral']
 
 # --- NÉV-LEKÉPEZŐ SZÓTÁR (HTML és Plot feliratokhoz) ---
@@ -116,6 +121,7 @@ NAME_MAPPING = {
     'MAE_Header': 'MAE (Test)',
     'Optimum_Header': 'Optimum (Conc. / Load / Temp.)',
     'Pred_Header': 'Predicted value at the last 5 minutes (COF / FAI)',
+    'Hertz_Stress_MPa': 'Max. Hertzian Stress [MPa]',
     'Time_Header': 'Tuning & Training Time / Prediction Time'
 }
 
@@ -154,11 +160,11 @@ models_config = {
             inverse_func=np.exp
         ),
         "params": {
-            "regressor__xgb__estimator__n_estimators": [100, 300],
-            "regressor__xgb__estimator__learning_rate": [0.05, 0.1, 0.2],
-            "regressor__xgb__estimator__max_depth": [5, 10],
-            "regressor__xgb__estimator__reg_alpha": [0, 1, 5],
-            "regressor__xgb__estimator__reg_lambda": [5.0, 20.0]
+            "regressor__xgb__estimator__n_estimators": [100, 200],
+            "regressor__xgb__estimator__learning_rate": [0.01, 0.05, 0.1],
+            "regressor__xgb__estimator__max_depth": [3, 5, 7],
+            "regressor__xgb__estimator__reg_alpha": [5, 10, 20],
+            "regressor__xgb__estimator__reg_lambda": [10, 20, 50]
         }
     },
     "Neural Network (MLP)": {
@@ -171,11 +177,10 @@ models_config = {
             inverse_func=np.exp
         ),
         "params": {
-            "regressor__mlp__hidden_layer_sizes": [(50,), (50, 25)],
-            "regressor__mlp__alpha": [1.0, 5.0, 10.0],
+            "regressor__mlp__hidden_layer_sizes": [(30,), (50,)],
+            "regressor__mlp__alpha": [5.0, 10.0, 20.0],
             "regressor__mlp__activation": ['relu', 'tanh'],
-            "regressor__mlp__learning_rate_init": [0.001, 0.01]
-
+            "regressor__mlp__learning_rate_init": [0.001, 0.005]
         }
     },
     "Random Forest": {
@@ -188,9 +193,9 @@ models_config = {
             inverse_func=np.exp
         ),
         "params": {
-            "regressor__rf__n_estimators": [100, 300],
-            "regressor__rf__max_depth": [8, 15],
-            "regressor__rf__min_samples_leaf": [5, 15]
+            "regressor__rf__n_estimators": [100, 200],
+            "regressor__rf__max_depth": [5, 8, 12],
+            "regressor__rf__min_samples_leaf": [10, 20, 50]
         }
     },
     "LightGBM": {
@@ -203,10 +208,11 @@ models_config = {
             inverse_func=np.exp
         ),
         "params": {
-            "regressor__lgbm__estimator__n_estimators": [100, 300],
-            "regressor__lgbm__estimator__learning_rate": [0.05, 0.1, 0.2],
-            "regressor__lgbm__estimator__max_depth": [5, 10],
-            "regressor__lgbm__estimator__reg_lambda": [5.0, 20.0]
+            "regressor__lgbm__estimator__n_estimators": [100, 200],
+            "regressor__lgbm__estimator__learning_rate": [0.01, 0.05, 0.1],
+            "regressor__lgbm__estimator__max_depth": [4, 6, 8],
+            "regressor__lgbm__estimator__reg_lambda": [10, 20, 50],
+            "regressor__lgbm__estimator__min_child_samples": [20, 50]
         }
     },
     "CatBoost": {
@@ -219,10 +225,10 @@ models_config = {
             inverse_func=np.exp
         ),
         "params": {
-            "regressor__cat__estimator__iterations": [100, 300],
-            "regressor__cat__estimator__learning_rate": [0.05, 0.1, 0.2],
-            "regressor__cat__estimator__depth": [5, 8],
-            "regressor__cat__estimator__l2_leaf_reg": [10, 50]
+            "regressor__cat__estimator__iterations": [100, 250],
+            "regressor__cat__estimator__learning_rate": [0.03, 0.08],
+            "regressor__cat__estimator__depth": [4, 6, 8],
+            "regressor__cat__estimator__l2_leaf_reg": [20, 50, 100]
         }
     },
     "KNN Regressor": {
@@ -245,7 +251,7 @@ models_config = {
             ('ridge', Ridge())
         ]),
         "params": {
-            "ridge__alpha": [10.0, 100.0, 500.0]
+            "ridge__alpha": [100.0, 500.0, 1000.0]
         }
     }
 }
