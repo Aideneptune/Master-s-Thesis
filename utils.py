@@ -19,6 +19,12 @@ def create_features(df):
     """Származtatott jellemzők generálása."""
     df['Log_Time'] = np.log(df['Time'])
     df['Time_Squared'] = df['Time'] ** 2
+    
+    # --- Hertz-féle maximális feszültség számítása ---
+    E_star = config.E_MODULUS / (2.0 * (1.0 - config.POISSON_RATIO**2))
+    a = np.cbrt((3.0 * df['Load'] * config.BALL_RADIUS) / (4.0 * E_star))
+    df['Hertz_Stress_MPa'] = (3.0 * df['Load']) / (2.0 * np.pi * a**2)
+    
     return df
 
 def filter_outliers_grouped(df, group_col, cols, low_q=0.01, high_q=0.99):
@@ -124,7 +130,7 @@ def plot_learning_curve(estimator, X, y, cv=None, n_jobs=-1, train_sizes=np.lins
     plt.savefig(os.path.join(results_dir, "Learning_Curve.svg"), format='svg', bbox_inches='tight', pad_inches=0.1)
     plt.close()
 
-def generate_html_report(results, xlsx_files, full_df, desc_df, html_path, results_dir, doe_suggestions, optimum_results, shap_text="", timing_stats=None, dynamic_descriptions=None, distribution_summary=None):
+def generate_html_report(results, xlsx_files, full_df, desc_df, html_path, results_dir, doe_suggestions, optimum_results, shap_text="", timing_stats=None, dynamic_descriptions=None, distribution_summary=None, plotly_3d_html=None):
     """HTML jelentés generálása a megadott PDF struktúra alapján."""
     sorted_results = sorted(results, key=lambda x: x['R2_Test'], reverse=True)
     best_model_res = sorted_results[0]
@@ -208,6 +214,22 @@ def generate_html_report(results, xlsx_files, full_df, desc_df, html_path, resul
             
     html_content += f"""
         </ul>
+        
+        <div class="details-box" style="background-color: #f4f7f6; border-left: 4px solid #4CAF50; margin-top: 20px;">
+            <h3 style="margin-top: 0;">Hertzian Maximum Contact Stress Formula</h3>
+            <p>The maximum contact stress (<strong>P<sub>max</sub></strong>) for a ball-on-flat contact is calculated as:</p>
+            <p style="text-align: center; font-size: 1.2em; margin: 15px 0;">
+                <strong>P<sub>max</sub> = 3F / (2&pi;a<sup>2</sup>)</strong>
+            </p>
+            <p>Where:</p>
+            <ul style="margin-bottom: 0;">
+                <li><strong>F</strong> = Normal Load [N]</li>
+                <li><strong>a</strong> = Contact radius [mm] = <sup>3</sup>&radic;(3FR / 4E<sup>*</sup>)</li>
+                <li><strong>R</strong> = Ball radius [mm] (<em>{config.BALL_RADIUS} mm</em>)</li>
+                <li><strong>E<sup>*</sup></strong> = Effective elastic modulus [MPa] = E / (2 &times; (1 - &nu;<sup>2</sup>))</li>
+            </ul>
+            <p style="margin-top: 10px; font-style: italic; color: #555;">Material constants used: E = {config.E_MODULUS:g} MPa, &nu; = {config.POISSON_RATIO}</p>
+        </div>
 
         <h2 id="sec2">2. Dataset descriptive statistics</h2>
         <div style="overflow-x:auto;">
@@ -221,6 +243,14 @@ def generate_html_report(results, xlsx_files, full_df, desc_df, html_path, resul
         <h3>File Distribution by Operating Conditions</h3>
         <div style="overflow-x:auto; max-height: 400px; margin-bottom: 30px;">
             {dist_html}
+        </div>"""
+
+    if plotly_3d_html:
+        html_content += f"""
+        <h3>Interactive 3D Data Distribution</h3>
+        <p><em>Use your mouse to rotate, zoom, and pan the 3D plot below.</em></p>
+        <div class="no-print" style="margin-bottom: 30px; border: 1px solid #ccc; padding: 10px; background-color: #fafafa;">
+            {plotly_3d_html}
         </div>"""
 
     html_content += """
