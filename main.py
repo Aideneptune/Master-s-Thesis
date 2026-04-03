@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.lines import Line2D
 from matplotlib.ticker import FuncFormatter, MaxNLocator
+import plotly.graph_objects as go
 import glob
 import os
 import joblib
@@ -95,14 +96,17 @@ else:
                 df['Esterified'] = df['Esterified'].fillna(0).astype(int)
             
             if not df.empty:
+                df_raw_cof = df['COF'].copy()
+                
                 if len(all_data) == 0:
                     plt.figure(figsize=(6.3, 3.15))
-                    plt.plot(df['Time'], df['COF'], label='Eredeti jel', color='silver', alpha=0.7)
-
+                    plt.plot(df['Time'], df_raw_cof, label='Eredeti jel', color='silver', alpha=0.7)
+                    
                 df['COF'] = df['COF'].rolling(window=config.ROLLING_WINDOW_SIZE).mean()
                 df = df.dropna(subset=['COF'])
+                
                 if len(all_data) == 0:
-                    plt.plot(df['Time'], df['COF'], label='Filtered signal (Rolling Mean)', color='orange') # Visszaállítva a korábbi label-re
+                    plt.plot(df['Time'], df['COF'], label='Filtered signal (Rolling Mean)', color='orange')
                     plt.xlabel("Time [s]")
                     plt.ylabel("Coefficient of friction (COF) [-]")
                     ymin, ymax = plt.gca().get_ylim()
@@ -111,14 +115,11 @@ else:
                     plt.savefig(os.path.join(config.RESULTS_DIR, "Effect_of_noise_filtering.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
                     plt.savefig(os.path.join(config.RESULTS_DIR, "Effect_of_noise_filtering.svg"), format='svg', bbox_inches='tight', pad_inches=0.1)
                     plt.close()
-
-                # Generate a second example plot from a different file
-                if len(all_data) == 49: # Corresponds to the 50th file (0-indexed)
+                    
+                if len(all_data) == 49:
                     plt.figure(figsize=(6.3, 3.15))
-                    original_cof_50 = df['COF'].copy()
-                    plt.plot(df['Time'], original_cof_50, label='Eredeti jel (50. fájl)', color='silver', alpha=0.7)
-                    filtered_cof_50 = df['COF'].rolling(window=config.ROLLING_WINDOW_SIZE).mean()
-                    plt.plot(df['Time'], filtered_cof_50, label='Filtered signal (Rolling Mean)', color='blue')
+                    plt.plot(df['Time'], df_raw_cof.loc[df.index], label='Eredeti jel (50. fájl)', color='silver', alpha=0.7)
+                    plt.plot(df['Time'], df['COF'], label='Filtered signal (Rolling Mean)', color='blue')
                     plt.xlabel("Time [s]")
                     plt.ylabel("Coefficient of friction (COF) [-]")
                     ymin, ymax = plt.gca().get_ylim()
@@ -166,8 +167,10 @@ file_group = full_df.groupby('File_ID').agg({
     'Concentration': 'mean',
     'Esterified': 'first'
 })
-file_group['Temperature'] = file_group['Temperature'].round().astype(int)
-file_group['Load'] = file_group['Load'].round().astype(int)
+file_group['Temperature'] = (file_group['Temperature'] / 5).round() * 5
+file_group['Temperature'] = file_group['Temperature'].astype(int)
+file_group['Load'] = (file_group['Load'] / 5).round() * 5
+file_group['Load'] = file_group['Load'].astype(int)
 file_group['Concentration'] = file_group['Concentration'].round(2)
 distribution_summary = file_group.groupby(['Temperature', 'Load', 'Concentration', 'Esterified']).size().reset_index(name='File_Count')
 distribution_summary = distribution_summary.sort_values(by='File_Count', ascending=False).reset_index(drop=True)
@@ -175,7 +178,7 @@ print("\n--- Adateloszlás (fájlok száma mérési pontonként) ---")
 print(distribution_summary.to_string(index=False))
 
 print("\n--- Preparing Data and Cross-Validation Folds ---")
-X = full_df[['Time', 'Log_Time', 'Time_Squared', 'Load', 'Temperature', 'Concentration', 'Esterified']]
+X = full_df[['Time', 'Log_Time', 'Time_Squared', 'Load', 'Temperature', 'Concentration', 'Esterified', 'Hertz_Stress_MPa']]
 Y = full_df[['COF', 'Friction absolute integral']]
 groups = full_df['File_ID']
 
@@ -750,28 +753,43 @@ for ester_state_doe in [0, 1]:
         norm_std_cof = (std_cof - std_cof.min()) / (std_cof.max() - std_cof.min() + 1e-9)
         norm_std_fai = (std_fai - std_fai.min()) / (std_fai.max() - std_fai.min() + 1e-9)
         avg_uncertainty = (norm_std_cof + norm_std_fai) / 2
-        norm_dist = (dist_metric - dist_metric.min()) / (dist_metric.max() - dist_metric.min() + 1e-9)
 
         doe_grid = doe_grid_df.copy()
-        doe_grid['Uncertainty_COF'] = std_cof
-        doe_grid['Uncertainty_FAI'] = std_fai
-        doe_grid['Distance'] = dist_metric
-        doe_grid['Score'] = config.UNCERTAINTY_WEIGHT * avg_uncertainty + config.SPARSITY_WEIGHT * norm_dist
+        doe_grid['Avg_Uncertainty'] = avg_uncertainty
 
         existing_set = set((round(row['Concentration'], 2), int(row['Load']), int(row['Temperature']), int(row['Esterified'])) for _, row in existing_subset.iterrows())
-        doe_candidates = doe_grid[~doe_grid.apply(lambda row: (round(row['Concentration'], 2), int(row['Load']), int(row['Temperature']), int(row['Esterified'])) in existing_set, axis=1)].sort_values(by='Score', ascending=False)
+        doe_candidates = doe_grid[~doe_grid.apply(lambda row: (round(row['Concentration'], 2), int(row['Load']), int(row['Temperature']), int(row['Esterified'])) in existing_set, axis=1)]
 
         final_suggestions = []
         candidates_pool = doe_candidates.copy()
+        current_existing_scaled = X_existing_scaled.values.tolist()
+        
         for _ in range(5):
             if candidates_pool.empty: break
+            
+            nbrs = NearestNeighbors(n_neighbors=1).fit(current_existing_scaled)
+            X_cand_scaled = scaler_doe.transform(candidates_pool[doe_features])
+            dist_metric = nbrs.kneighbors(X_cand_scaled)[0].flatten()
+            
+            norm_dist = (dist_metric - dist_metric.min()) / (dist_metric.max() - dist_metric.min() + 1e-9)
+            
+            candidates_pool['Distance'] = dist_metric
+            candidates_pool['Score'] = config.UNCERTAINTY_WEIGHT * candidates_pool['Avg_Uncertainty'] + config.SPARSITY_WEIGHT * norm_dist
+            candidates_pool = candidates_pool.sort_values(by='Score', ascending=False)
+            
             best_candidate = candidates_pool.iloc[0]
-            final_suggestions.append(best_candidate)
-            mask_load = (candidates_pool['Load'] >= best_candidate['Load'] - 20) & (candidates_pool['Load'] <= best_candidate['Load'] + 20)
-            mask_temp = (candidates_pool['Temperature'] >= best_candidate['Temperature'] - 10) & (candidates_pool['Temperature'] <= best_candidate['Temperature'] + 10)
-            mask_conc = (candidates_pool['Concentration'] >= best_candidate['Concentration'] - 0.1) & (candidates_pool['Concentration'] <= best_candidate['Concentration'] + 0.1)
-            candidates_pool.loc[mask_load & mask_temp & mask_conc, 'Score'] *= 0.5
-            candidates_pool = candidates_pool.drop(best_candidate.name).sort_values(by='Score', ascending=False)
+            
+            idx_in_grid = best_candidate.name
+            best_candidate_dict = best_candidate.to_dict()
+            best_candidate_dict['Uncertainty_COF'] = std_cof[idx_in_grid]
+            best_candidate_dict['Uncertainty_FAI'] = std_fai[idx_in_grid]
+            
+            final_suggestions.append(best_candidate_dict)
+            
+            best_scaled = scaler_doe.transform(pd.DataFrame([best_candidate[doe_features]], columns=doe_features))
+            current_existing_scaled.append(best_scaled[0].tolist())
+            
+            candidates_pool = candidates_pool.drop(best_candidate.name)
 
         doe_suggestions = pd.DataFrame(final_suggestions)
         doe_duration = time.time() - start_doe
@@ -924,13 +942,10 @@ print("\n--- Generating Trend Analysis Plot (Temperature vs COF) ---")
 trend_temp_range = np.linspace(40, 120, 20)
 trend_df_base = pd.DataFrame({'Time': 7200, 'Load': 100, 'Temperature': trend_temp_range, 'Concentration': 0.5, 'Esterified': 0})
 trend_df_ester = pd.DataFrame({'Time': 7200, 'Load': 100, 'Temperature': trend_temp_range, 'Concentration': 0.5, 'Esterified': config.PLOT_ESTERIFIED_STATE})
-
 trend_df_base = create_features(trend_df_base)[X_cols_raw]
 trend_df_ester = create_features(trend_df_ester)[X_cols_raw]
-
 trend_base_trans = global_vif.transform(global_interact.transform(trend_df_base))
 trend_ester_trans = global_vif.transform(global_interact.transform(trend_df_ester))
-
 preds_base = np.maximum(best_model_overall.predict(trend_base_trans), config.PREDICTION_LOWER_BOUND)[:, 0]
 preds_ester = np.maximum(best_model_overall.predict(trend_ester_trans), config.PREDICTION_LOWER_BOUND)[:, 0]
 
@@ -948,18 +963,14 @@ dynamic_descriptions["Temperature_Trend_Analysis.png"] = "Temperature Trend Anal
 plt.savefig(os.path.join(config.RESULTS_DIR, "Temperature_Trend_Analysis.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
 plt.close()
 
-# Temperature Trend Analysis (Optimum Bonus)
 print("\n--- Generating Trend Analysis Plot (Temperature vs COF) [Optimum Bonus] ---")
 trend_temp_range_sm = np.linspace(40, 120, 20)
 trend_df_base_sm = pd.DataFrame({'Time': 7200, 'Load': opt_load, 'Temperature': trend_temp_range_sm, 'Concentration': opt_conc, 'Esterified': 0})
 trend_df_ester_sm = pd.DataFrame({'Time': 7200, 'Load': opt_load, 'Temperature': trend_temp_range_sm, 'Concentration': opt_conc, 'Esterified': config.PLOT_ESTERIFIED_STATE})
-
 trend_df_base_sm = create_features(trend_df_base_sm)[X_cols_raw]
 trend_df_ester_sm = create_features(trend_df_ester_sm)[X_cols_raw]
-
 trend_base_trans_sm = global_vif.transform(global_interact.transform(trend_df_base_sm))
 trend_ester_trans_sm = global_vif.transform(global_interact.transform(trend_df_ester_sm))
-
 preds_base_sm = np.maximum(best_model_overall.predict(trend_base_trans_sm), config.PREDICTION_LOWER_BOUND)[:, 0]
 preds_ester_sm = np.maximum(best_model_overall.predict(trend_ester_trans_sm), config.PREDICTION_LOWER_BOUND)[:, 0]
 
@@ -977,18 +988,14 @@ dynamic_descriptions["Temperature_Trend_Analysis_Optimum.png"] = f"Temperature T
 plt.savefig(os.path.join(config.RESULTS_DIR, "Temperature_Trend_Analysis_Optimum.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
 plt.close()
 
-# Load Trend Analysis
 print("\n--- Generating Trend Analysis Plot (Load vs COF) ---")
 trend_load_range = np.linspace(10, 200, 20)
 trend_df_base_load = pd.DataFrame({'Time': 7200, 'Load': trend_load_range, 'Temperature': 100, 'Concentration': 0.5, 'Esterified': 0})
 trend_df_ester_load = pd.DataFrame({'Time': 7200, 'Load': trend_load_range, 'Temperature': 100, 'Concentration': 0.5, 'Esterified': config.PLOT_ESTERIFIED_STATE})
-
 trend_df_base_load = create_features(trend_df_base_load)[X_cols_raw]
 trend_df_ester_load = create_features(trend_df_ester_load)[X_cols_raw]
-
 trend_base_trans_load = global_vif.transform(global_interact.transform(trend_df_base_load))
 trend_ester_trans_load = global_vif.transform(global_interact.transform(trend_df_ester_load))
-
 preds_base_load = np.maximum(best_model_overall.predict(trend_base_trans_load), config.PREDICTION_LOWER_BOUND)[:, 0]
 preds_ester_load = np.maximum(best_model_overall.predict(trend_ester_trans_load), config.PREDICTION_LOWER_BOUND)[:, 0]
 
@@ -1006,18 +1013,33 @@ dynamic_descriptions["Load_Trend_Analysis.png"] = "Load Trend Analysis (Temp: 10
 plt.savefig(os.path.join(config.RESULTS_DIR, "Load_Trend_Analysis.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
 plt.close()
 
-# Load Trend Analysis (Optimum Bonus)
+print("\n--- Generating Trend Analysis Plot (Hertz Stress vs COF) ---")
+E_star_trend = config.E_MODULUS / (2.0 * (1.0 - config.POISSON_RATIO**2))
+a_trend = np.cbrt((3.0 * trend_load_range * config.BALL_RADIUS) / (4.0 * E_star_trend))
+trend_hertz_range = (3.0 * trend_load_range) / (2.0 * np.pi * a_trend**2)
+
+fig, ax = plt.subplots(figsize=(6.3, 3.15))
+plt.plot(trend_hertz_range, preds_base_load, marker='o', color='purple', label='Not esterified (0)')
+plt.plot(trend_hertz_range, preds_ester_load, marker='s', color='orange', label='Esterified Oil (1)')
+plt.fill_between(trend_hertz_range, preds_base_load, preds_ester_load, color='grey', alpha=0.2, label='Ester Advantage')
+plt.xlabel("Max. Hertzian Stress [MPa]")
+plt.ylabel("Expected COF [-]")
+ymin, ymax = ax.get_ylim()
+ax.set_ylim(ymin, ymax + (ymax - ymin) * 0.35)
+plt.legend(loc='upper right')
+ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{y:g}'))
+dynamic_descriptions["Hertz_Trend_Analysis.png"] = "Hertzian Contact Stress Trend Analysis (Temp: 100°C, Conc: 0.50wt%). Derived from the 10-200N load range."
+plt.savefig(os.path.join(config.RESULTS_DIR, "Hertz_Trend_Analysis.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
+plt.close()
+
 print("\n--- Generating Trend Analysis Plot (Load vs COF) [Optimum Bonus] ---")
 trend_load_range_sm = np.linspace(10, 200, 20)
 trend_df_base_load_sm = pd.DataFrame({'Time': 7200, 'Load': trend_load_range_sm, 'Temperature': opt_temp, 'Concentration': opt_conc, 'Esterified': 0})
 trend_df_ester_load_sm = pd.DataFrame({'Time': 7200, 'Load': trend_load_range_sm, 'Temperature': opt_temp, 'Concentration': opt_conc, 'Esterified': config.PLOT_ESTERIFIED_STATE})
-
 trend_df_base_load_sm = create_features(trend_df_base_load_sm)[X_cols_raw]
 trend_df_ester_load_sm = create_features(trend_df_ester_load_sm)[X_cols_raw]
-
 trend_base_trans_load_sm = global_vif.transform(global_interact.transform(trend_df_base_load_sm))
 trend_ester_trans_load_sm = global_vif.transform(global_interact.transform(trend_df_ester_load_sm))
-
 preds_base_load_sm = np.maximum(best_model_overall.predict(trend_base_trans_load_sm), config.PREDICTION_LOWER_BOUND)[:, 0]
 preds_ester_load_sm = np.maximum(best_model_overall.predict(trend_ester_trans_load_sm), config.PREDICTION_LOWER_BOUND)[:, 0]
 
@@ -1035,18 +1057,14 @@ dynamic_descriptions["Load_Trend_Analysis_Optimum.png"] = f"Load Trend Analysis 
 plt.savefig(os.path.join(config.RESULTS_DIR, "Load_Trend_Analysis_Optimum.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
 plt.close()
 
-# Concentration Trend Analysis
 print("\n--- Generating Trend Analysis Plot (Concentration vs COF) ---")
 trend_conc_range = np.linspace(0, 0.6, 20)
 trend_df_base_conc = pd.DataFrame({'Time': 7200, 'Load': 100, 'Temperature': 100, 'Concentration': trend_conc_range, 'Esterified': 0})
 trend_df_ester_conc = pd.DataFrame({'Time': 7200, 'Load': 100, 'Temperature': 100, 'Concentration': trend_conc_range, 'Esterified': config.PLOT_ESTERIFIED_STATE})
-
 trend_df_base_conc = create_features(trend_df_base_conc)[X_cols_raw]
 trend_df_ester_conc = create_features(trend_df_ester_conc)[X_cols_raw]
-
 trend_base_trans_conc = global_vif.transform(global_interact.transform(trend_df_base_conc))
 trend_ester_trans_conc = global_vif.transform(global_interact.transform(trend_df_ester_conc))
-
 preds_base_conc = np.maximum(best_model_overall.predict(trend_base_trans_conc), config.PREDICTION_LOWER_BOUND)[:, 0]
 preds_ester_conc = np.maximum(best_model_overall.predict(trend_ester_trans_conc), config.PREDICTION_LOWER_BOUND)[:, 0]
 
@@ -1065,18 +1083,14 @@ dynamic_descriptions["Concentration_Trend_Analysis.png"] = "Concentration Trend 
 plt.savefig(os.path.join(config.RESULTS_DIR, "Concentration_Trend_Analysis.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
 plt.close()
 
-# Concentration Trend Analysis (Optimum Bonus)
 print("\n--- Generating Trend Analysis Plot (Concentration vs COF) [Optimum Bonus] ---")
 trend_conc_range_sm = np.linspace(0, 0.6, 20)
 trend_df_base_conc_sm = pd.DataFrame({'Time': 7200, 'Load': opt_load, 'Temperature': opt_temp, 'Concentration': trend_conc_range_sm, 'Esterified': 0})
 trend_df_ester_conc_sm = pd.DataFrame({'Time': 7200, 'Load': opt_load, 'Temperature': opt_temp, 'Concentration': trend_conc_range_sm, 'Esterified': config.PLOT_ESTERIFIED_STATE})
-
 trend_df_base_conc_sm = create_features(trend_df_base_conc_sm)[X_cols_raw]
 trend_df_ester_conc_sm = create_features(trend_df_ester_conc_sm)[X_cols_raw]
-
 trend_base_trans_conc_sm = global_vif.transform(global_interact.transform(trend_df_base_conc_sm))
 trend_ester_trans_conc_sm = global_vif.transform(global_interact.transform(trend_df_ester_conc_sm))
-
 preds_base_conc_sm = np.maximum(best_model_overall.predict(trend_base_trans_conc_sm), config.PREDICTION_LOWER_BOUND)[:, 0]
 preds_ester_conc_sm = np.maximum(best_model_overall.predict(trend_ester_trans_conc_sm), config.PREDICTION_LOWER_BOUND)[:, 0]
 
@@ -1139,6 +1153,77 @@ ax.tick_params(axis='both', which='major', labelsize=9)
 ax.legend(loc='upper left', bbox_to_anchor=(1.05, 1))
 plt.savefig(os.path.join(config.RESULTS_DIR, "3D_distribution_of_input_data.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
 plt.close()
+
+# --- Plotly Interactive 3D Plot ---
+print("\n--- Generating Interactive 3D Plot ---")
+fig_3d = go.Figure()
+fig_3d.add_trace(go.Scatter3d(
+    x=base_pts['Load_plot'], y=base_pts['Temperature_plot'], z=base_pts['Concentration_plot'],
+    mode='markers',
+    marker=dict(size=4, color='purple', opacity=0.8, line=dict(width=1, color='black')),
+    name='Not esterified (0)'
+))
+fig_3d.add_trace(go.Scatter3d(
+    x=ester_pts['Load_plot'], y=ester_pts['Temperature_plot'], z=ester_pts['Concentration_plot'],
+    mode='markers',
+    marker=dict(size=4, color='orange', opacity=0.8, line=dict(width=1, color='black'), symbol='square'),
+    name='Esterified (1)'
+))
+fig_3d.update_layout(
+    scene=dict(xaxis_title='Load [N]', yaxis_title='Temperature [°C]', zaxis_title='Concentration [wt%]'),
+    margin=dict(l=0, r=0, b=0, t=30),
+    legend=dict(x=0.8, y=0.9)
+)
+fig_3d.write_html(os.path.join(config.RESULTS_DIR, "3D_distribution.html"))
+plotly_3d_html = fig_3d.to_html(full_html=False, include_plotlyjs='cdn')
+
+print("\n--- Generating Interactive 3D Plot with DoE ---")
+fig_3d_doe = go.Figure()
+fig_3d_doe.add_trace(go.Scatter3d(
+    x=base_pts['Load_plot'], y=base_pts['Temperature_plot'], z=base_pts['Concentration_plot'],
+    mode='markers',
+    marker=dict(size=4, color='purple', opacity=0.8, line=dict(width=1, color='black')),
+    name='Not esterified (0)'
+))
+fig_3d_doe.add_trace(go.Scatter3d(
+    x=ester_pts['Load_plot'], y=ester_pts['Temperature_plot'], z=ester_pts['Concentration_plot'],
+    mode='markers',
+    marker=dict(size=4, color='orange', opacity=0.8, line=dict(width=1, color='black'), symbol='square'),
+    name='Esterified (1)'
+))
+
+doe_base = doe_suggestions_combined[doe_suggestions_combined['Esterified'] == 0]
+if not doe_base.empty:
+    fig_3d_doe.add_trace(go.Scatter3d(
+        x=doe_base['Load'], y=doe_base['Temperature'], z=doe_base['Concentration'],
+        mode='markers',
+        marker=dict(size=8, color='cyan', opacity=1.0, line=dict(width=1.5, color='black')),
+        name='DoE Suggestions (0)'
+    ))
+    
+doe_ester = doe_suggestions_combined[doe_suggestions_combined['Esterified'] == 1]
+if not doe_ester.empty:
+    fig_3d_doe.add_trace(go.Scatter3d(
+        x=doe_ester['Load'], y=doe_ester['Temperature'], z=doe_ester['Concentration'],
+        mode='markers',
+        marker=dict(size=8, color='red', opacity=1.0, line=dict(width=1.5, color='black'), symbol='square'),
+        name='DoE Suggestions (1)'
+    ))
+
+fig_3d_doe.update_layout(
+    scene=dict(xaxis_title='Load [N]', yaxis_title='Temperature [°C]', zaxis_title='Concentration [wt%]'),
+    margin=dict(l=0, r=0, b=0, t=30),
+    legend=dict(x=0.8, y=0.9)
+)
+fig_3d_doe.write_html(os.path.join(config.RESULTS_DIR, "3D_distribution_with_DoE.html"))
+plotly_3d_doe_html = fig_3d_doe.to_html(full_html=False, include_plotlyjs='cdn')
+
+combined_plotly_html = plotly_3d_html + """
+</div>
+<h3 style="margin-top: 40px;">Interactive 3D Data Distribution with DoE Suggestions</h3>
+<p><em>Cyan and Red markers represent the suggested new measurement points.</em></p>
+<div class="no-print" style="margin-bottom: 30px; border: 1px solid #ccc; padding: 10px; background-color: #fafafa;">
+""" + plotly_3d_doe_html
 
 for ester_state_plot, suggestions in all_doe_suggestions.items():
     if suggestions.empty:
@@ -1242,7 +1327,7 @@ timing_stats = {
     'shap': format_time(shap_duration) if shap_duration is not None else "N/A", 
     'doe': format_time(total_doe_duration)
 }
-html_content = generate_html_report(results, xlsx_files, full_df, desc_df, html_path, config.RESULTS_DIR, doe_suggestions_combined, optimum_results, shap_analysis_text, timing_stats, dynamic_descriptions, distribution_summary)
+html_content = generate_html_report(results, xlsx_files, full_df, desc_df, html_path, config.RESULTS_DIR, doe_suggestions_combined, optimum_results, shap_analysis_text, timing_stats, dynamic_descriptions, distribution_summary, combined_plotly_html)
 
 with open(html_path, "w", encoding="utf-8") as f:
     f.write(html_content)
