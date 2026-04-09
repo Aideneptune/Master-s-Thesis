@@ -5,6 +5,8 @@ from cycler import cycler
 from sklearn.ensemble import RandomForestRegressor
 from xgboost import XGBRegressor
 from sklearn.linear_model import Ridge
+from sklearn.svm import SVR
+from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.neural_network import MLPRegressor
 from sklearn.multioutput import MultiOutputRegressor
 from lightgbm import LGBMRegressor
@@ -129,9 +131,6 @@ NAME_MAPPING = {
 IMAGE_DESCRIPTIONS = {
     "Effect_of_noise_filtering.png": "Comparison of raw measurement data and the smoothed curve using a rolling mean filter on the first data file.",
     "Effect_of_noise_filtering_2.png": "Comparison of raw measurement data and the smoothed curve using a rolling mean filter on a different data file for verification.",
-    "3D_distribution_of_input_data.png": "Distribution of measurement points in the Load, Temperature, and Concentration space.",
-    "DoE_2D_Projections.png": "2D Projections of Existing Data and DoE Suggestions, showing where new measurements are proposed.",
-    "COF_heatmap.png": "Estimated static friction coefficient (COF) as a function of Load and Temperature.",
     "Correlation_matrix.png": "Strength of linear relationships between variables (Pearson correlation).",
     "Model_comparison.png": "Comparison of model accuracy (R2) and error (RMSE) on the test dataset.",
     "Neural_network_structure.png": "Structure of the trained neural network (MLP).",
@@ -142,7 +141,6 @@ IMAGE_DESCRIPTIONS = {
     "Optimum_comparison.png": "Direct comparison of optimum curves for base oil and esterified oil.",
     "Pareto_Optimization.png": "Pareto front showing trade-offs between COF and FAI.",
     "Feature_importance.png": "Feature importance ranking for the best performing model.",
-    "residuals_best_model.png": "Residual plot of the best performing model showing the distribution of prediction errors.",
     "Temperature_Trend_Analysis.png": "Effect of Temperature on the expected COF, comparing Esterified Oil with Base Oil.",
     "Load_Trend_Analysis.png": "Effect of Load on the expected COF, comparing Esterified Oil with Base Oil.",
     "Concentration_Trend_Analysis.png": "Effect of Concentration on the expected COF, comparing Esterified Oil with Base Oil."
@@ -162,11 +160,13 @@ models_config = {
         "params": {
             "regressor__xgb__estimator__n_estimators": [100, 200],
             "regressor__xgb__estimator__learning_rate": [0.01, 0.05, 0.1],
-            "regressor__xgb__estimator__max_depth": [3, 5, 7],
+            "regressor__xgb__estimator__max_depth": [2, 3, 5],
             "regressor__xgb__estimator__reg_alpha": [5, 10, 20],
-            "regressor__xgb__estimator__reg_lambda": [10, 20, 50]
+            "regressor__xgb__estimator__reg_lambda": [10, 20, 50],
+            "regressor__xgb__estimator__min_child_weight": [50, 100, 200]
         }
     },
+
     "Neural Network (MLP)": {
         "model": TransformedTargetRegressor(
             regressor=Pipeline([
@@ -194,8 +194,8 @@ models_config = {
         ),
         "params": {
             "regressor__rf__n_estimators": [100, 200],
-            "regressor__rf__max_depth": [5, 8, 12],
-            "regressor__rf__min_samples_leaf": [10, 20, 50]
+            "regressor__rf__max_depth": [4, 6, 8],
+            "regressor__rf__min_samples_leaf": [200, 400, 600]
         }
     },
     "LightGBM": {
@@ -210,9 +210,9 @@ models_config = {
         "params": {
             "regressor__lgbm__estimator__n_estimators": [100, 200],
             "regressor__lgbm__estimator__learning_rate": [0.01, 0.05, 0.1],
-            "regressor__lgbm__estimator__max_depth": [4, 6, 8],
+            "regressor__lgbm__estimator__max_depth": [2, 4, 6],
             "regressor__lgbm__estimator__reg_lambda": [10, 20, 50],
-            "regressor__lgbm__estimator__min_child_samples": [20, 50]
+            "regressor__lgbm__estimator__min_child_samples": [200, 400, 600]
         }
     },
     "CatBoost": {
@@ -227,8 +227,9 @@ models_config = {
         "params": {
             "regressor__cat__estimator__iterations": [100, 250],
             "regressor__cat__estimator__learning_rate": [0.03, 0.08],
-            "regressor__cat__estimator__depth": [4, 6, 8],
-            "regressor__cat__estimator__l2_leaf_reg": [20, 50, 100]
+            "regressor__cat__estimator__depth": [3, 5, 7],
+            "regressor__cat__estimator__l2_leaf_reg": [50, 100, 150],
+            "regressor__cat__estimator__min_data_in_leaf": [200, 400]
         }
     },
     "KNN Regressor": {
@@ -253,5 +254,5 @@ models_config = {
         "params": {
             "ridge__alpha": [100.0, 500.0, 1000.0]
         }
-    }
+    },
 }
