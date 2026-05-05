@@ -1,0 +1,16 @@
+numpy
+pandas
+matplotlib
+plotly
+scikit-learn
+xgboost
+lightgbm
+catboost
+optuna
+shap
+scipy
+tqdm
+joblib
+openpyxl
+reportlab
+PyMuPDF
