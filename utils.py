@@ -89,7 +89,10 @@ def plot_pareto_front(results_dir, predictions, color_values, color_label="Tempe
     if discrete:
         unique_vals = np.sort(np.unique(color_values))
         n_bins = len(unique_vals)
-        cmap = plt.get_cmap('plasma', n_bins)
+        if n_bins == 2:
+            cmap = mcolors.ListedColormap(['purple', 'orange'])
+        else:
+            cmap = plt.get_cmap('plasma', n_bins)
         if n_bins > 1:
             step = (unique_vals[-1] - unique_vals[0]) / (n_bins - 1)
             boundaries = np.linspace(unique_vals[0] - step / 2, unique_vals[-1] + step / 2, n_bins + 1)
@@ -104,8 +107,8 @@ def plot_pareto_front(results_dir, predictions, color_values, color_label="Tempe
     plt.plot(pareto_cof, pareto_fai, color='purple', marker='o', label='Pareto front (Trade-off optimums)')
     plt.plot(knee_cof, knee_fai, color='orange', marker='o', markersize=10, label='Knee point (Best trade-off)', markeredgecolor='black')
     plt.annotate(f"Knee\n({knee_cof:.3f}, {knee_fai:.3f})", (knee_cof, knee_fai), 
-                 xytext=(15, 15), textcoords='offset points', 
-                 arrowprops=dict(arrowstyle="->", color='orange'),
+                 xytext=(10, 60), textcoords='offset points', 
+                 arrowprops=dict(arrowstyle="->", color='black', lw=1.5),
                  bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="black", lw=0.5, alpha=0.7))
     plt.xlabel('Coefficient of friction (COF) [-]')
     plt.ylabel('Friction Absolute Integral [-]')
@@ -148,7 +151,7 @@ def plot_learning_curve(estimator, X, y, cv=None, n_jobs=-1, train_sizes=np.lins
     plt.savefig(os.path.join(results_dir, filename.replace('.png', '.svg')), format='svg', bbox_inches='tight', pad_inches=0.1)
     plt.close()
 
-def generate_html_report(results, xlsx_files, full_df, desc_df, filtered_desc_df, html_path, results_dir, doe_suggestions, optimum_results, shap_text="", timing_stats=None, dynamic_descriptions=None, distribution_summary=None, plotly_3d_html=None):
+def generate_html_report(results, xlsx_files, full_df, desc_df, filtered_desc_df, html_path, results_dir, doe_suggestions, optimum_results, shap_text="", timing_stats=None, dynamic_descriptions=None, distribution_summary=None, plotly_3d_html=None, safe_validation_points=None):
     """HTML jelentés generálása a megadott PDF struktúra alapján."""
     sorted_results = sorted(results, key=lambda x: x['R2_Test'], reverse=True)
     best_model_res = sorted_results[0]
@@ -459,15 +462,31 @@ def generate_html_report(results, xlsx_files, full_df, desc_df, filtered_desc_df
         <h2 id="sec7">7. DoE Suggestions (New measurements)</h2>
         <div class="details-box">
             <p>Suggestions are based on a combination of model uncertainty (Bagging variance) and distance from existing measurements (Sparsity). The goal is to investigate uncertain and unexplored areas.</p>
-            <table>
+"""
+
+    if safe_validation_points:
+        html_content += """            <div style="background-color: #e8f5e9; border-left: 4px solid #4CAF50; padding: 10px; margin-bottom: 20px;">
+                <h3 style="margin-top: 0; color: #2e7d32;">Recommended Safe Validation Points</h3>
+                <p style="margin-bottom: 10px;">These points represent the safest unexplored areas with the lowest model uncertainty and highest similarity to existing data. Ideal for validating model accuracy.</p>
+                <ul>"""
+        for est_state, pt in safe_validation_points.items():
+            if pt is not None:
+                oil_type = "Esterified" if est_state == 1 else "Not esterified"
+                html_content += f"""
+                    <li><strong>{oil_type}:</strong> Concentration: {pt['Concentration']:.2f} wt%, Load: {int(pt['Load'])} N, Temperature: {int(pt['Temperature'])} &deg;C
+                    <br><em>Expected COF: {pt['Predicted_COF']:.4f} (Uncertainty: {pt['Avg_Uncertainty']:.4f})</em></li>"""
+        html_content += """                </ul>
+            </div>"""
+
+    html_content += """            <table>
                 <thead>
                     <tr>
                         <th>Oil Type</th>
                         <th>Concentration [%]</th>
                         <th>Load [N]</th>
                         <th>Temperature [°C]</th>
-                        <th>Uncertainty (Std Dev)</th>
-                        <th>Distance (Sparsity)</th>
+                        <th>Norm. Uncertainty</th>
+                        <th>Norm. Distance</th>
                         <th>Combined Score</th>
                     </tr>
                 </thead>
@@ -481,8 +500,8 @@ def generate_html_report(results, xlsx_files, full_df, desc_df, filtered_desc_df
                         <td>{row['Concentration']:.2f}</td>
                         <td>{int(row['Load'])}</td>
                         <td>{int(row['Temperature'])}</td>
-                        <td>{row['Uncertainty_COF']:.4f}</td>
-                        <td>{row['Distance']:.4f}</td>
+                        <td>{row['Avg_Uncertainty']:.4f}</td>
+                        <td>{row['Norm_Distance']:.4f}</td>
                         <td>{row['Score']:.4f}</td>
                     </tr>"""
                     
