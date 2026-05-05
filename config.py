@@ -45,6 +45,9 @@ PLOT_SETTINGS = {
     'cof_ylim': (0.0, 0.25)
 }
 
+# --- SHAP BEÁLLÍTÁSOK ---
+SHAP_SAMPLE_SIZE = 1000
+
 # --- DOE BEÁLLÍTÁSOK ---
 UNCERTAINTY_WEIGHT = 0.5
 SPARSITY_WEIGHT = 0.5
