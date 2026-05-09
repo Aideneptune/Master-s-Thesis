@@ -1,0 +1,74 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
+
+# --- 1. Basic settings ---
+plt.rcParams.update({'font.family': 'Tahoma', 'font.size': 9})
+
+width_cm, height_cm = 16, 8
+fig = plt.figure(figsize=(width_cm / 2.54, height_cm / 2.54), dpi=300)
+
+gs = GridSpec(1, 2, width_ratios=[1.5, 1], figure=fig, wspace=0.8)
+
+# --- 2. Inputs and Calculations ---
+E1, v1 = 210000.0, 0.3
+E2, v2 = 210000.0, 0.3
+d1, F = 10.0, 100.0
+R1 = d1 / 2.0
+
+E_star = 1 / ((1 - v1**2) / E1 + (1 - v2**2) / E2)
+a = (3 * F * R1 / (4 * E_star))**(1/3)
+Pmax = 3 * F / (2 * np.pi * a**2)
+
+# --- 3. 3D Plot ---
+ax3d = fig.add_subplot(gs[0, 0], projection='3d')
+plot_range = a * 1.5
+x = np.linspace(-plot_range, plot_range, 100)
+y = np.linspace(-plot_range, plot_range, 100)
+X, Y = np.meshgrid(x, y)
+R = np.sqrt(X**2 + Y**2)
+Z = np.zeros_like(R)
+mask = R <= a
+Z[mask] = Pmax * np.sqrt(1 - (R[mask] / a)**2)
+
+surf = ax3d.plot_surface(X, Y, Z, cmap='plasma', edgecolor='none', alpha=0.9)
+
+ax3d.view_init(elev=20, azim=-65)
+
+ax3d.set_xlabel('x (mm)', labelpad=5)
+ax3d.set_ylabel('y (mm)', labelpad=5)
+ax3d.set_zlabel('P (MPa)', labelpad=5)
+ax3d.tick_params(axis='both', which='major', labelsize=8)
+
+# --- 4. COLORBAR ---
+cbar_ax = fig.add_axes([0.58, 0.25, 0.012, 0.45]) 
+cbar = fig.colorbar(surf, cax=cbar_ax)
+cbar.ax.tick_params(labelsize=8)
+cbar.set_label('Pressure (MPa)', size=8)
+
+# --- 5. Parameters panel ---
+ax_text = fig.add_subplot(gs[0, 1])
+ax_text.axis('off')
+
+input_text = (
+    "$\\bf{Inputs:}$\n"
+    f"$F = {F:.1f}$ N\n"
+    f"$R_1 = {R1:.1f}$ mm\n"
+    f"$R_2 = \\infty$ (disk's surface)\n"
+    f"$E_{{1,2}} = {E1:.0f}$ MPa\n"
+    f"$\\nu_{{1,2}} = {v1}$"
+)
+
+result_text = (
+    "$\\bf{Results:}$\n"
+    f"$a = {a:.3f}$ mm\n"
+    f"$P_{{max}} = {Pmax:.1f}$ MPa"
+)
+
+ax_text.text(0.2, 0.85, input_text, transform=ax_text.transAxes, verticalalignment='top', linespacing=1.6)
+ax_text.text(0.2, 0.30, result_text, transform=ax_text.transAxes, verticalalignment='top', linespacing=1.6)
+
+# --- 6. Save ---
+plt.subplots_adjust(left=0.05, right=0.95)
+plt.savefig('Hertzian_Stress_Final_Fixed.png', dpi=300)
+plt.show()
