@@ -1,0 +1,116 @@
+import os
+import io
+import numpy as np
+import pandas as pd
+import joblib
+import plotly.graph_objects as go
+from PIL import Image
+from tqdm import tqdm
+import config
+
+def render_frame(args):
+    angle, fig, distance = args
+    camera = dict(
+        eye=dict(
+            x=distance * np.cos(angle),
+            y=distance * np.sin(angle),
+            z=0.8
+        )
+    )
+    fig.update_layout(scene_camera=camera)
+    # Return raw bytes to avoid PIL cross-process overhead
+    return fig.to_image(format="png", width=800, height=600, scale=1.5)
+
+def main():
+    print("--- Generating 3D GIF Animations ---")
+    
+    data_cache_path = os.path.join(config.CACHE_DIR, "full_df_cache.pkl")
+    doe_cache_path = os.path.join(config.CACHE_DIR, "doe_cache_1.pkl")
+    
+    if not os.path.exists(data_cache_path) or not os.path.exists(doe_cache_path):
+        print("Error: Cache files not found. Please run main.py first with caching enabled!")
+        return
+
+    # 1. Load data from cache
+    print("Loading data...")
+    full_df = pd.read_pickle(data_cache_path)
+    
+    plot_df = full_df.groupby('File_ID').agg({
+        'Load': 'mean', 
+        'Temperature': 'mean', 
+        'Concentration': 'mean', 
+        'Esterified': 'first'
+    }).reset_index()
+
+    # Add position jitter for visibility
+    np.random.seed(config.RANDOM_SEED)
+    plot_df['Load_plot'] = plot_df['Load'] + np.random.uniform(-2.0, 2.0, size=len(plot_df))
+    plot_df['Temperature_plot'] = plot_df['Temperature'] + np.random.uniform(-1.0, 1.0, size=len(plot_df))
+    plot_df['Concentration_plot'] = np.clip(plot_df['Concentration'] + np.random.uniform(-0.01, 0.01, size=len(plot_df)), 0, None)
+
+    ester_pts = plot_df[plot_df['Esterified'] == 1]
+
+    # Load DoE data (Esterified only)
+    cached_doe = joblib.load(doe_cache_path)
+    doe_ester = cached_doe['doe_suggestions']
+
+    # 2. Create base Plotly figures
+    # --- GIF 1: Esterified Only ---
+    fig1 = go.Figure()
+    fig1.add_trace(go.Scatter3d(
+        x=ester_pts['Load_plot'], y=ester_pts['Temperature_plot'], z=ester_pts['Concentration_plot'],
+        mode='markers',
+        marker=dict(size=5, color='orange', opacity=0.8, line=dict(width=1, color='black'), symbol='square'),
+        name='Esterified (1)'
+    ))
+    fig1.update_layout(
+        scene=dict(xaxis_title='Load [N]', yaxis_title='Temperature [°C]', zaxis_title='Concentration [wt%]'),
+        margin=dict(l=0, r=0, b=0, t=40),
+        legend=dict(x=0.8, y=0.9)
+    )
+
+    # --- GIF 2: Esterified + DoE ---
+    fig2 = go.Figure(fig1.data)
+    if not doe_ester.empty:
+        fig2.add_trace(go.Scatter3d(
+            x=doe_ester['Load'], y=doe_ester['Temperature'], z=doe_ester['Concentration'],
+            mode='markers',
+            marker=dict(size=10, color='red', opacity=1.0, line=dict(width=1.5, color='black'), symbol='square'),
+            name='DoE Suggestions (1)'
+        ))
+    fig2.update_layout(
+        scene=dict(xaxis_title='Load [N]', yaxis_title='Temperature [°C]', zaxis_title='Concentration [wt%]'),
+        margin=dict(l=0, r=0, b=0, t=40),
+        legend=dict(x=0.8, y=0.9)
+    )
+
+    # 3. GIF rendering function
+    def create_gif(fig, filename, frames=240, distance=2.5):
+        
+        start_angle = np.pi / 4
+        end_angle = start_angle - np.pi / 4
+        
+        angles_forward = np.linspace(start_angle, end_angle, frames // 2, endpoint=False)
+        angles_backward = np.linspace(end_angle, start_angle, frames // 2, endpoint=False)
+        angles = np.concatenate((angles_forward, angles_backward))
+        
+        args = [(angle, fig, distance) for angle in angles]
+        
+        image_bytes_list = []
+        for arg in tqdm(args, total=len(angles), desc=f"Generating: {filename}"):
+            image_bytes_list.append(render_frame(arg))
+            
+        images = [Image.open(io.BytesIO(b)) for b in image_bytes_list]
+            
+        out_path = os.path.join(config.RESULTS_DIR, filename)
+        images[0].save(out_path, save_all=True, append_images=images[1:], optimize=True, duration=40, loop=0)
+        print(f"Done! Saved: {out_path}")
+
+    print("\n--- Creating first GIF ---")
+    create_gif(fig1, "3D_Esterified_Only.gif", frames=240, distance=2.5)
+    
+    print("\n--- Creating second GIF ---")
+    create_gif(fig2, "3D_Esterified_with_DoE.gif", frames=240, distance=2.5)
+
+if __name__ == "__main__":
+    main()
