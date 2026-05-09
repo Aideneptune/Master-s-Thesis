@@ -5,7 +5,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
 
 class PandasStandardScaler(BaseEstimator, TransformerMixin):
-    """Egyedi StandardScaler, amely DataFrame-et ad vissza az oszlopnevek megtartásához."""
+    """Custom StandardScaler that returns a DataFrame to preserve column names."""
     def __init__(self):
         self.scaler = StandardScaler()
         self.feature_names_in_ = None
@@ -25,7 +25,7 @@ class PandasStandardScaler(BaseEstimator, TransformerMixin):
         return np.array(self.feature_names_in_) if self.feature_names_in_ is not None else None
 
 class InteractionFeaturesTransformer(BaseEstimator, TransformerMixin):
-    """Egyedi transzformátor interakciós jellemzők generálásához tanult átlagokkal."""
+    """Custom transformer for generating interaction features using learned means."""
     def __init__(self, load_col='Load', temp_col='Temperature', conc_col='Concentration', ester_col='Esterified'):
         self.load_col = load_col
         self.temp_col = temp_col
@@ -49,7 +49,7 @@ class InteractionFeaturesTransformer(BaseEstimator, TransformerMixin):
     def transform(self, X):
         X_df = X.copy() if isinstance(X, pd.DataFrame) else pd.DataFrame(X, columns=self.feature_names_in_)
         
-        # Interakciók generálása a fit során mentett átlagokkal
+        # Generate interactions with fitted means
         X_df[f'{self.load_col}_x_{self.temp_col}'] = (X_df[self.load_col] - self.l_mean_) * (X_df[self.temp_col] - self.t_mean_)
         X_df[f'{self.load_col}_x_{self.conc_col}'] = (X_df[self.load_col] - self.l_mean_) * (X_df[self.conc_col] - self.c_mean_)
         X_df[f'{self.temp_col}_x_{self.conc_col}'] = (X_df[self.temp_col] - self.t_mean_) * (X_df[self.conc_col] - self.c_mean_)
@@ -57,7 +57,7 @@ class InteractionFeaturesTransformer(BaseEstimator, TransformerMixin):
         X_df[f'{self.ester_col}_x_{self.load_col}'] = (X_df[self.ester_col] - self.e_mean_) * (X_df[self.load_col] - self.l_mean_)
         X_df[f'{self.ester_col}_x_{self.conc_col}'] = (X_df[self.ester_col] - self.e_mean_) * (X_df[self.conc_col] - self.c_mean_)
         
-        # Fizikai alapú hányadosok (zéróosztás elkerülése kis konstanssal)
+        # Physics-based ratios (avoiding division by zero)
         X_df[f'{self.load_col}_div_{self.temp_col}'] = X_df[self.load_col] / (X_df[self.temp_col] + 1e-6)
         X_df[f'{self.conc_col}_div_{self.load_col}'] = X_df[self.conc_col] / (X_df[self.load_col] + 1e-6)
         X_df[f'{self.temp_col}_div_{self.conc_col}'] = X_df[self.temp_col] / (X_df[self.conc_col] + 1e-6)
@@ -77,7 +77,7 @@ class InteractionFeaturesTransformer(BaseEstimator, TransformerMixin):
         return np.array(list(input_features) + new_features)
 
 class VIFSelector(BaseEstimator, TransformerMixin):
-    """Egyedi transzformátor VIF-alapú jellemző-kiválasztáshoz."""
+    """Custom transformer for VIF-based feature selection."""
     def __init__(self, threshold=10.0, sample_size=5000, protected_cols=None):
         self.threshold = threshold
         self.sample_size = sample_size
