@@ -50,7 +50,7 @@ for f in glob.glob(os.path.join(config.RESULTS_DIR, "*.*")):
         pass
 
 # --- Data Loading ---
-print("\n--- Adatok beolvasása folyamatban... ---")
+print("\n--- Loading data... ---")
 data_cache_path = os.path.join(config.CACHE_DIR, "full_df_cache.pkl")
 xlsx_files_cache_path = os.path.join(config.CACHE_DIR, "xlsx_files_cache.pkl")
 start_loading = time.time()
@@ -78,11 +78,19 @@ if not cache_loaded:
         sys.exit()
 
     all_data = []
+    missing_cols_files = []
     for filepath in tqdm(xlsx_files, desc="Loading data", unit="file"):
         try:
             with pd.ExcelFile(filepath, engine='openpyxl') as xls:
                 sheet_name = "Sheet Numeric SRA" if "Sheet Numeric SRA" in xls.sheet_names else 0
                 df = pd.read_excel(xls, sheet_name=sheet_name, header=0)
+                
+            missing = []
+            if 'Concentration' not in df.columns: missing.append('Concentration')
+            if 'Esterified' not in df.columns: missing.append('Esterified')
+            if missing:
+                missing_cols_files.append((os.path.basename(filepath), missing))
+
             df = df.drop(0).reset_index(drop=True)
             df = df.iloc[:-5]
             
@@ -158,17 +166,16 @@ if not cache_loaded:
                     plt.close()
 
                 all_data.append(df)
-                # --- VÁLTOZTATÁS: Csak az utolsó 5 perc átlagának megtartása ---
                 max_time = df['Time'].max()
                 last_5m_df = df[df['Time'] >= max_time - 300]
                 
                 if not last_5m_df.empty:
                     mean_cof = last_5m_df['COF'].mean()
                     mean_fai = last_5m_df['Friction absolute integral'].mean()
-                    summary_row = df.iloc[[-1]].copy()  # Fájlonként csak 1 sort tartunk meg
+                    summary_row = df.iloc[[-1]].copy()
                     summary_row['COF'] = mean_cof
                     summary_row['Friction absolute integral'] = mean_fai
-                    summary_row['Time'] = 7200.0  # Fixáljuk az időt
+                    summary_row['Time'] = 7200.0
                     all_data.append(summary_row)
         except (FileNotFoundError, KeyError, ValueError) as e:
             print(f"Error: {os.path.basename(filepath)} - {e}")
@@ -176,27 +183,23 @@ if not cache_loaded:
     if not all_data:
         sys.exit()
 
+    if missing_cols_files:
+        print("\n--- Warning: Missing columns in loaded files ---")
+        for fname, mcols in missing_cols_files:
+            print(f"  - {fname}: missing -> {', '.join(mcols)}")
+    else:
+        print("\n--- Column check: All files contain 'Esterified' and 'Concentration' columns! ---")
+
     full_df = pd.concat(all_data, ignore_index=True)
     full_df = full_df[full_df['Time'] > 0]
     full_df = full_df[(full_df['COF'] > 0) & (full_df['Friction absolute integral'] > 0)]
 
-    # high_cof_mask = full_df['COF'] > 0.325
-    # if high_cof_mask.any():
-    #     high_cof_counts = full_df[high_cof_mask].groupby('File_ID').size()
-    #     print(f"\nFigyelem: Extrém magas COF (> 0.325) értékek miatti szűrés. Összesen {high_cof_mask.sum()} sor érintett.")
-    #     for fid, count in high_cof_counts.items():
-    #         print(f"  - {fid}: {count} sor")
-    #     full_df = full_df[~high_cof_mask]
-
     full_df = create_features(full_df)
-
-    # full_df = filter_outliers_grouped(full_df, 'File_ID', ['COF', 'Friction absolute integral'], low_q=0.05, high_q=0.95)
 
     if 'Esterified' not in full_df.columns:
         full_df['Esterified'] = 0
     full_df['Esterified'] = full_df['Esterified'].fillna(0).astype(int)
 
-    # Fizikai paraméterek kerekítése a csoportosításhoz (legközelebbi 1-re a terhelést és hőmérsékletet)
     rounded_load = full_df['Load'].round()
     rounded_temp = full_df['Temperature'].round()
 
@@ -204,9 +207,6 @@ if not cache_loaded:
     full_df['Sample_Weight'] = 1.0 / counts
     full_df['Sample_Weight'] = np.sqrt(full_df['Sample_Weight'])
 
-    # --- Magas COF értékek (extrém súrlódás/berágódás) alulsúlyozása ---
-    # Ezzel csökkenthető a modell túlbecslési (overestimation) hajlama a normál tartományban
-    #full_df.loc[full_df['COF'] > 0.25, 'Sample_Weight'] *= 0.5
 
     full_df['Sample_Weight'] = full_df['Sample_Weight'] * (len(full_df) / full_df['Sample_Weight'].sum())
 
@@ -218,20 +218,20 @@ if not cache_loaded:
 loading_duration = time.time() - start_loading
 print(f"Data loading/caching completed in {format_time(loading_duration)}")
 
-# --- COF > 0.26 ellenőrzése (már a betöltött/cache-elt adatokon is lefut) ---
+# --- Check for COF > 0.26 ---
 high_cof_026_mask = full_df['COF'] > 0.26
 if high_cof_026_mask.any():
     high_cof_026_counts = full_df[high_cof_026_mask].groupby('File_ID').size()
-    print(f"\nInfo: COF > 0.26 értékek száma a szűrt adathalmazban: {high_cof_026_mask.sum()} db.")
-    print("Ezek az alábbi mérésekhez (fájlokhoz) tartoznak:")
+    print(f"\nInfo: Number of COF > 0.26 values in filtered dataset: {high_cof_026_mask.sum()}.")
+    print("These belong to the following files:")
     for fid, count in high_cof_026_counts.items():
-        print(f"  - {fid}: {count} adatpont")
+        print(f"  - {fid}: {count} data points")
 else:
-    print("\nInfo: Nincs 0.26 feletti COF érték az adathalmazban.")
+    print("\nInfo: No COF values above 0.26 in the dataset.")
 
 import matplotlib.gridspec as gridspec
 
-print("\n--- Bemeneti és Célváltozó eloszlás diagram generálása... ---")
+print("\n--- Generating Input and Target Distribution plots... ---")
 fig = plt.figure(figsize=(10, 6))
 gs = gridspec.GridSpec(2, 3, width_ratios=[1, 1, 0.8], wspace=0.4, hspace=0.4)
 
@@ -261,7 +261,6 @@ plt.close()
 
 dynamic_descriptions["Input_Target_Distributions.png"] = "Distribution of the main input variables (histograms) and the target COF variable (boxplot)."
 
-# --- Adateloszlási mátrix ---
 file_group = full_df.groupby('File_ID').agg({
     'Temperature': 'mean',
     'Load': 'mean',
@@ -275,7 +274,7 @@ file_group['Load'] = file_group['Load'].astype(int)
 file_group['Concentration'] = file_group['Concentration'].round(2)
 distribution_summary = file_group.groupby(['Temperature', 'Load', 'Concentration', 'Esterified']).size().reset_index(name='File_Count')
 distribution_summary = distribution_summary.sort_values(by='File_Count', ascending=False).reset_index(drop=True)
-print("\n--- Adateloszlás (fájlok száma mérési pontonként) ---")
+print("\n--- Data Distribution (files per measurement point) ---")
 print(distribution_summary.to_string(index=False))
 
 print("\n--- Preparing Data and Cross-Validation Folds ---")
@@ -352,9 +351,8 @@ template_df = template_df[template_df['Time'] > 0]
 # --- Custom Classes ---
 class PreFittedVotingRegressor(RegressorMixin, BaseEstimator):
     """
-    Egyedi Voting modell, amely támogatja a többdimenziós kimenetet (MultiOutput),
-    és egyszerűen átlagolja az előre betanított bázismodellek becsléseit,
-    valamint képes azokat a teljes adathalmazon újra betanítani.
+    Custom Voting model that supports MultiOutput and averages pre-fitted base models,
+    also supporting retraining on the full dataset.
     """
     def __init__(self, estimators, weights=None):
         self.estimators = estimators
@@ -376,7 +374,7 @@ class PreFittedVotingRegressor(RegressorMixin, BaseEstimator):
         return np.average([model.predict(X) for name, model in self.estimators], axis=0, weights=self.weights)
 
 # --- Model Training ---
-print("\n--- Modellek betanítása és tuningolása... ---")
+print("\n--- Training and tuning models... ---")
 models_cache_path = os.path.join(config.CACHE_DIR, "models_cache.pkl")
 if config.USE_CACHE and os.path.exists(models_cache_path):
     print("\n--- Loading Trained Models From Cache ---")
@@ -520,7 +518,7 @@ if not models_loaded:
         
         mae_test = mean_absolute_error(y_test, y_pred)
         
-        # --- Állandósult (utolsó 5 perc) pontosság számítása ---
+        # Calculate steady-state (last 5 min) accuracy
         steady_actual_cof = []
         steady_actual_fai = []
         steady_pred_cof = []
@@ -647,7 +645,7 @@ if not models_loaded:
         smooth_models = [r for r in results if "Ridge" in r['Name'] or "Neural Network" in r['Name']]
         if smooth_models:
             best_smooth = sorted(smooth_models, key=lambda x: x['R2_CV'], reverse=True)[0]
-            top3_results[2] = best_smooth # A leggyengébb fát lecseréljük a legjobb simító modellre
+            top3_results[2] = best_smooth
 
     top3_models = [r['Model'] for r in top3_results]
     top3_names = [r['Name'] for r in top3_results]
@@ -656,7 +654,6 @@ if not models_loaded:
     ensemble_name = "Ensemble (Top 3 Voting)"
     estimators_list = [(name, model) for name, model in zip(top3_names, top3_models)]
 
-    # --- SciPy optimalizált súlyozás (Teszt halmazon minimalizálva az MSE-t) ---
     raw_preds = np.array([model.predict(X_test) for model in top3_models]) # Shape: (3, N, 2)
     y_true_vals = y_test.values
     
@@ -693,7 +690,6 @@ if not models_loaded:
     rmse_cof_ens, rmse_fai_ens = rmse_test_raw_ens[0], rmse_test_raw_ens[1]
     mae_test_ens = mean_absolute_error(y_test, y_pred_ens)
     
-    # --- Állandósult (utolsó 5 perc) pontosság az Ensemble-hoz ---
     steady_actual_cof_ens = []
     steady_actual_fai_ens = []
     steady_pred_cof_ens = []
@@ -805,12 +801,11 @@ if not models_loaded:
 
 print(f"\nBest model found: {best_model_name} with average R2 CV: {best_r2_overall:.4f}")
 
-print("\n--- Kiemelkedő hibaértékek kiszűrése a végső betanítás előtt... ---")
+print("\n--- Filtering high error values before final retraining... ---")
 full_preds = np.maximum(best_model_overall.predict(X), config.PREDICTION_LOWER_BOUND)
 full_residuals = full_preds[:, 0] - Y['COF'].values
 valid_mask = np.abs(full_residuals) <= 0.05
 
-# Védőháló: Ellenőrizzük, hogy van-e olyan fájl, aminek az összes sora kiesne
 df_mask = pd.DataFrame({
     'File_ID': full_df['File_ID'].values, 
     'Valid': valid_mask, 
@@ -820,16 +815,15 @@ dropped_files = df_mask.groupby('File_ID')['Valid'].sum()
 completely_dropped = dropped_files[dropped_files == 0].index
 
 if len(completely_dropped) > 0:
-    print(f"\nFigyelem! {len(completely_dropped)} fájl teljesen kiesne. Visszamentjük a legkisebb hibájú pontjukat:")
+    print(f"\nWarning! {len(completely_dropped)} files would be completely dropped. Keeping their lowest error point:")
     for fid in completely_dropped:
         min_err_idx = df_mask[df_mask['File_ID'] == fid]['AbsError'].idxmin()
         valid_mask[min_err_idx] = True
-        print(f"  - {fid} (Megmentett pont hibája: {df_mask.loc[min_err_idx, 'AbsError']:.4f})")
+        print(f"  - {fid} (Saved point error: {df_mask.loc[min_err_idx, 'AbsError']:.4f})")
 
 dropped_count = np.sum(~valid_mask)
-print(f"Eltávolított anomáliák száma (|Error| > 0.05): {dropped_count} db adatpont a {len(X)} -ból.")
+print(f"Number of removed anomalies (|Error| > 0.05): {dropped_count} points out of {len(X)}.")
 
-# --- Új diagram: Kiszűrt pontok (Anomáliák) vizualizációja ---
 if dropped_count > 0:
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.scatter(full_df['Time'].values[valid_mask], full_residuals[valid_mask], color='blue', alpha=0.2, s=10, label='Points retained')
@@ -863,7 +857,6 @@ optimum_results = {}
 
 print("\n--- Calculating Optimums over the Parameter Grid ---")
 
-# Pareto front ábrák (kombinált hálózat generálása)
 pareto_grid_list = []
 for ester_state in [0, 1]:
     temp_grid = grid_df.copy()
@@ -945,7 +938,7 @@ for ester_state in [0, 1]:
     }
 
 # --- DoE Calculation ---
-print("\n--- DoE pontok számítása... ---")
+print("\n--- Calculating DoE points... ---")
 
 all_doe_suggestions = {}
 total_doe_duration = 0
@@ -962,9 +955,9 @@ for ester_state_doe in [0, 1]:
         doe_duration = cached_doe['doe_duration']
         best_safe = cached_doe.get('best_safe', None)
         if best_safe is not None:
-            print(f"\n>> Ajánlott Biztonságos Validációs Pont ({state_str}):")
-            print(f"   Koncentráció: {best_safe['Concentration']:.2f} wt%, Terhelés: {int(best_safe['Load'])} N, Hőmérséklet: {int(best_safe['Temperature'])} °C")
-            print(f"   Várt COF: {best_safe['Predicted_COF']:.4f} (Bizonytalanság: {best_safe['Avg_Uncertainty']:.4f})")
+            print(f"\n>> Recommended Safe Validation Point ({state_str}):")
+            print(f"   Concentration: {best_safe['Concentration']:.2f} wt%, Load: {int(best_safe['Load'])} N, Temperature: {int(best_safe['Temperature'])} °C")
+            print(f"   Expected COF: {best_safe['Predicted_COF']:.4f} (Uncertainty: {best_safe['Avg_Uncertainty']:.4f})")
             
     else:
         print(f"\n--- Starting DoE generation for {state_str} (Cache not found or disabled) ---")
@@ -1039,18 +1032,17 @@ for ester_state_doe in [0, 1]:
         doe_suggestions = pd.DataFrame(final_suggestions)
         doe_duration = time.time() - start_doe
 
-        # --- BIZTONSÁGOS VALIDÁCIÓS PONT KERESÉSE ---
+        # --- FIND SAFE VALIDATION POINT ---
         doe_grid['Predicted_COF'] = np.mean(doe_preds[:, :, 0], axis=0)
         doe_grid['Distance'] = full_dist_metric
-        # Csak azokat a pontokat nézzük, amik a legközelebbi 25%-ban vannak és a legbiztosabb 25%-ban
         safe_mask = (doe_grid['Distance'] < doe_grid['Distance'].quantile(0.25)) & (doe_grid['Avg_Uncertainty'] < doe_grid['Avg_Uncertainty'].quantile(0.25))
         best_safe = None
         if safe_mask.any():
             safe_cands = doe_grid[safe_mask].sort_values(by='Predicted_COF', ascending=True)
             best_safe = safe_cands.iloc[0].to_dict()
-            print(f"\n>> Ajánlott Biztonságos Validációs Pont ({state_str}):")
-            print(f"   Koncentráció: {best_safe['Concentration']:.2f} wt%, Terhelés: {int(best_safe['Load'])} N, Hőmérséklet: {int(best_safe['Temperature'])} °C")
-            print(f"   Várt COF: {best_safe['Predicted_COF']:.4f} (Bizonytalanság: {best_safe['Avg_Uncertainty']:.4f})")
+            print(f"\n>> Recommended Safe Validation Point ({state_str}):")
+            print(f"   Concentration: {best_safe['Concentration']:.2f} wt%, Load: {int(best_safe['Load'])} N, Temperature: {int(best_safe['Temperature'])} °C")
+            print(f"   Expected COF: {best_safe['Predicted_COF']:.4f} (Uncertainty: {best_safe['Avg_Uncertainty']:.4f})")
 
         if config.USE_CACHE:
             print(f"Saving DoE suggestions for {state_str} to cache...")
@@ -1083,7 +1075,6 @@ print("\n--- Generating Feature Importance Plot ---")
 best_res = next(r for r in results if r['Name'] == best_model_name)
 if best_res['Feature_Imp'] is not None:
     print(f"Generating feature importance plot for {best_model_name}...")
-    # Csökkenő sorrend beállítása
     sorted_idx = np.argsort(best_res['Feature_Imp'])
     sorted_feats = [best_res['Selected_Features'][i] for i in sorted_idx]
     sorted_imp = best_res['Feature_Imp'][sorted_idx]
@@ -1098,12 +1089,10 @@ if best_res['Feature_Imp'] is not None:
     plt.close()
 
 print("\n--- SHAP Analysis ---")
-print("\n--- SHAP analízis generálása... ---")
 shap_analysis_text = ""
 shap_duration = None
 tree_models = ["Random Forest", "XGBoost", "LightGBM", "CatBoost"]
 
-# Mindig a legjobb famodellről készítünk SHAP elemzést
 tree_results = [r for r in results if any(m in r['Name'] for m in tree_models)]
 if tree_results:
     best_tree_res = sorted(tree_results, key=lambda x: x['R2_CV'], reverse=True)[0]
@@ -1112,13 +1101,11 @@ if tree_results:
     print(f"Generating SHAP analysis for the best tree-based model: {shap_model_name}...")
 
     try:
-        # Átmenetileg kikapcsoljuk a minor beosztásokat a SHAP MAXTICKS hiba elkerülésére
         plt.rcParams['xtick.minor.visible'] = False
         plt.rcParams['ytick.minor.visible'] = False
 
         start_shap = time.time()
 
-        # --- SHAP Alulmintavételezés (Subsampling) a gyorsabb futásért ---
         if len(X_test) > config.SHAP_SAMPLE_SIZE:
             print(f"Subsampling X_test for SHAP analysis from {len(X_test)} to {config.SHAP_SAMPLE_SIZE} instances for performance.")
             X_test_shap = X_test.sample(n=config.SHAP_SAMPLE_SIZE, random_state=config.RANDOM_SEED)
@@ -1138,7 +1125,7 @@ if tree_results:
         )
         
         X_test_display = pd.DataFrame(X_test_vif.values, index=X_test_shap.index, columns=vif_feature_names)
-        safe_mapping = {k: v for k, v in config.NAME_MAPPING.items() if k in X_test_display.columns}
+        safe_mapping = {k: v.replace(' [N]', '').replace(' [°C]', '') for k, v in config.NAME_MAPPING.items() if k in X_test_display.columns}
         X_test_display.rename(columns=safe_mapping, inplace=True)
         
         model_step_name = None
@@ -1165,7 +1152,6 @@ if tree_results:
 
             plot_progress = tqdm(total=8, desc="Generating SHAP plots", unit="plot")
 
-            # 0. SHAP Summary Plot (Beeswarm)
             plt.figure(figsize=(6.3, 3.15))
             shap.summary_plot(shap_values_to_plot, X_test_display, show=False)
             fig = plt.gcf()
@@ -1177,7 +1163,6 @@ if tree_results:
             plt.close()
             plot_progress.update(1)
 
-            # 1. SHAP Bar Plot (Globális fontosság)
             plt.figure(figsize=(6.3, 3.15))
             shap.summary_plot(shap_values_to_plot, X_test_display, plot_type="bar", show=False)
             fig = plt.gcf()
@@ -1189,7 +1174,6 @@ if tree_results:
             dynamic_descriptions["SHAP_bar_plot.png"] = "Global feature importance based on mean absolute SHAP values."
             plot_progress.update(1)
 
-            # 2. SHAP Dependence Plot (Load vs Esterified)
             plt.figure(figsize=(6.3, 3.15))
             shap.dependence_plot("Load [N]", shap_values_to_plot, X_test_display, interaction_index="Esterified", show=False, ax=plt.gca())
             fig = plt.gcf()
@@ -1198,7 +1182,6 @@ if tree_results:
             plt.close()
             plot_progress.update(1)
             
-            # 3. SHAP Dependence Plot (Temperature vs Esterified)
             plt.figure(figsize=(6.3, 3.15))
             shap.dependence_plot("Temperature [°C]", shap_values_to_plot, X_test_display, interaction_index="Esterified", show=False, ax=plt.gca())
             fig = plt.gcf()
@@ -1207,7 +1190,6 @@ if tree_results:
             plt.close()
             plot_progress.update(1)
 
-            # 4. SHAP Waterfall Plot (Első tesztpont lokális magyarázata)
             plt.figure(figsize=(8, 5))
             expected_val = explainer.expected_value
             if isinstance(expected_val, (list, np.ndarray)):
@@ -1225,7 +1207,6 @@ if tree_results:
             dynamic_descriptions["SHAP_waterfall_plot.png"] = "SHAP Waterfall Plot explaining the specific prediction of the first test instance."
             plot_progress.update(1)
 
-            # 5. SHAP Force Plot (Lokális horizontális magyarázat - a waterfall alternatívája)
             plt.figure(figsize=(10, 3))
             shap.force_plot(expected_val, shap_values_to_plot[0], X_test_display.iloc[0].round(3), matplotlib=True, show=False)
             fig = plt.gcf()
@@ -1235,7 +1216,6 @@ if tree_results:
             dynamic_descriptions["SHAP_force_plot.png"] = "SHAP Force Plot explaining the specific prediction of the first test instance (horizontal alternative to Waterfall)."
             plot_progress.update(1)
 
-            # 6. SHAP Heatmap Plot (Globális-lokális mintázatok az egész teszthalmazra)
             plt.figure(figsize=(8, 5))
             full_exp = shap.Explanation(values=shap_values_to_plot, 
                                         base_values=np.array([expected_val]*len(X_test_display)), 
@@ -1249,7 +1229,6 @@ if tree_results:
             dynamic_descriptions["SHAP_heatmap_plot.png"] = "SHAP Heatmap showing the impact of features across all test instances, ordered by model output. Great for discovering dataset-level patterns."
             plot_progress.update(1)
 
-            # 7. SHAP Decision Plot (Döntési útvonal az első 20 mintán)
             plt.figure(figsize=(8, 5))
             shap.decision_plot(expected_val, shap_values_to_plot[:20], features=X_test_display.iloc[:20], show=False)
             fig = plt.gcf()
@@ -1259,7 +1238,7 @@ if tree_results:
             dynamic_descriptions["SHAP_decision_plot.png"] = "SHAP Decision Plot for the first 20 test instances, highlighting cumulative feature effects along the decision path."
             plot_progress.close()
 
-            config.set_academic_plot_style() # Visszaállítjuk a stílust a SHAP után
+            config.set_academic_plot_style()
             
             mean_shap = np.abs(shap_values_to_plot).mean(axis=0)
             top_3 = sorted(dict(zip(X_test_display.columns, mean_shap)).items(), key=lambda x: x[1], reverse=True)[:3]
@@ -1277,11 +1256,11 @@ X_test_filtered = X_test[valid_test_mask]
 y_test_filtered = y_test[valid_test_mask]
 groups_test_filtered = groups.loc[X_test.index][valid_test_mask]
 
-print("\n--- Reziduális elemzés (Residual Plot) adatok kiszámítása... ---")
+print("\n--- Calculating residual plot data... ---")
 y_test_pred = np.maximum(best_model_overall.predict(X_test_filtered), config.PREDICTION_LOWER_BOUND)
 residuals = y_test_pred[:, 0] - y_test_filtered['COF'].values
 
-print("\n--- Tényleges vs. Becsült értékek és Reziduális Hisztogramok generálása minden modellhez... ---")
+print("\n--- Generating Actual vs Predicted and Residual Histograms for all models... ---")
 for res in results:
     model = res['Model']
     model_name = res['Name']
@@ -1289,9 +1268,8 @@ for res in results:
     
     preds = np.maximum(model.predict(X_test), config.PREDICTION_LOWER_BOUND)
     
-    # 1. Actual vs Predicted Plot
     fig, ax = plt.subplots(figsize=(6.3, 3.15))
-    plt.scatter(y_test['COF'].values, preds[:, 0], alpha=0.6, color='orange', edgecolors='k')
+    plt.scatter(y_test['COF'].values, preds[:, 0], alpha=0.3, color='royalblue', edgecolors='lightgrey', linewidths=0.5)
     min_val = min(np.min(y_test['COF'].values), np.min(preds[:, 0]))
     max_val = max(np.max(y_test['COF'].values), np.max(preds[:, 0]))
     plt.plot([min_val, max_val], [min_val, max_val], color='black', linestyle='--', linewidth=2)
@@ -1306,7 +1284,6 @@ for res in results:
     plt.savefig(os.path.join(config.RESULTS_DIR, filename), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
     plt.close()
 
-    # 2. Residual Histogram Plot
     model_residuals = preds[:, 0] - y_test['COF'].values
     fig, ax = plt.subplots(figsize=(6.3, 3.15))
     plt.hist(model_residuals, bins=30, color='purple', edgecolor='black', alpha=0.7)
@@ -1320,7 +1297,7 @@ for res in results:
     plt.savefig(os.path.join(config.RESULTS_DIR, hist_filename), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
     plt.close()
 
-print("\n--- Modellek összehasonlító diagramjának generálása... ---")
+print("\n--- Generating model comparison plots... ---")
 sorted_results_for_plots = sorted(results, key=lambda x: x['R2_Train'], reverse=True)
 model_names = [res['Name'] for res in sorted_results_for_plots]
 r2_train = [res['R2_Train'] for res in sorted_results_for_plots]
@@ -1419,21 +1396,21 @@ dynamic_descriptions["Model_comparison_Times.png"] = "Bar charts comparing the c
 fig_time.savefig(os.path.join(config.RESULTS_DIR, "Model_comparison_Times.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
 plt.close(fig_time)
 
-print("\n--- RMSE vizsgálata normál és magas COF tartományokon (Teszt halmaz) ---")
+print("\n--- RMSE analysis on normal and high COF ranges (Test set) ---")
 mask_high = y_test_filtered['COF'] > 0.26
 mask_normal = ~mask_high
 
 if mask_high.any():
     rmse_high = np.sqrt(mean_squared_error(y_test_filtered.loc[mask_high, 'COF'], y_test_pred[mask_high, 0]))
-    print(f"RMSE (COF > 0.26)  : {rmse_high:.4f}  <- Ha a súlyozás működik, ennek csökkennie kell.")
+    print(f"RMSE (COF > 0.26)  : {rmse_high:.4f}")
 else:
-    print("Nincs COF > 0.26 a (szűrt) teszt halmazban.")
+    print("No COF > 0.26 in the (filtered) test set.")
 
 if mask_normal.any():
     rmse_normal = np.sqrt(mean_squared_error(y_test_filtered.loc[mask_normal, 'COF'], y_test_pred[mask_normal, 0]))
-    print(f"RMSE (COF <= 0.26) : {rmse_normal:.4f}  <- Ha ez jelentősen megnő, a modell túltanulta a kiugró pontokat.")
+    print(f"RMSE (COF <= 0.26) : {rmse_normal:.4f}")
 
-print("\n--- Magas hibaértékek (|Error| > 0.05) forrásának azonosítása... ---")
+print("\n--- Identifying sources of high errors (|Error| > 0.05)... ---")
 error_df = X_test_filtered.copy()
 error_df['Residual'] = residuals
 error_df['File_ID'] = groups_test_filtered.values
@@ -1441,7 +1418,7 @@ error_df['Actual_COF'] = y_test_filtered['COF'].values
 
 high_error_df = error_df[error_df['Residual'].abs() > 0.05]
 if not high_error_df.empty:
-    print("\nFájlok a legtöbb |Error| > 0.05 hibával:")
+    print("\nFiles with the most |Error| > 0.05:")
     error_stats = high_error_df.groupby('File_ID').agg(
         Count=('Residual', 'count'),
         Avg_Time=('Time', 'mean'),
@@ -1450,7 +1427,7 @@ if not high_error_df.empty:
     ).sort_values(by='Count', ascending=False)
     print(error_stats.to_string())
 else:
-    print("\nNincs 0.05-nél nagyobb abszolút hiba a teszthalmazon.")
+    print("\nNo absolute error greater than 0.05 in the test set.")
 
 fig, ax = plt.subplots(figsize=(8, 5))
 unique_files = error_df['File_ID'].unique()
@@ -1471,7 +1448,7 @@ dynamic_descriptions["Error_Analysis_Output.png"] = "Scatter plot showing residu
 plt.savefig(os.path.join(config.RESULTS_DIR, "Error_Analysis_Output.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
 plt.close()
 
-print("\n--- Részleges függőségi ábrák (PDP) generálása... ---")
+print("\n--- Generating Partial Dependence Plots (PDP)... ---")
 pdp_features = [f for f in ['Load', 'Temperature', 'Concentration'] if f in X_test_filtered.columns]
 if 'Load' in X_test_filtered.columns and 'Temperature' in X_test_filtered.columns:
     pdp_features.append(('Load', 'Temperature'))
@@ -1917,7 +1894,7 @@ dynamic_descriptions["Combined_Model_Concentration_Trend_Optimum.png"] = f"Compa
 plt.savefig(os.path.join(config.RESULTS_DIR, "Combined_Model_Concentration_Trend_Optimum.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
 plt.close()
 
-print("\n--- Running Time (Bejáratási idő) analízis CatBoost segítségével... ---")
+print("\n--- Run-In Time Analysis using CatBoost... ---")
 from catboost import CatBoostRegressor
 
 file_run_in = []
@@ -2002,7 +1979,120 @@ dynamic_descriptions["RunIn_Trends.png"] = "Trend analysis showing how Temperatu
 plt.savefig(os.path.join(config.RESULTS_DIR, "RunIn_Trends.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
 plt.close()
 
-print("\n--- 2D Válaszfelületek (Contour Plots) generálása... ---")
+val_load = config.VALIDATION_LOAD
+val_temp = config.VALIDATION_TEMP
+val_conc = config.VALIDATION_CONC
+val_ester = config.PLOT_ESTERIFIED_STATE
+
+print(f"\n--- Generating validation curve and table ({val_load} N, {val_temp} °C, {val_conc} wt%) ---")
+
+val_match = full_df[
+    (full_df['Load'].round() == val_load) &
+    (full_df['Temperature'].round() == val_temp) &
+    (np.isclose(full_df['Concentration'], val_conc, atol=1e-3)) &
+    (full_df['Esterified'] == val_ester)
+]
+
+actual_time, actual_cof, actual_fai = None, None, None
+if not val_match.empty:
+    val_file_id = val_match['File_ID'].iloc[0]
+    val_file_data = full_df[full_df['File_ID'] == val_file_id].sort_values('Time')
+    actual_time = val_file_data['Time'].values
+    actual_cof = val_file_data['COF'].values
+    actual_fai = val_file_data['Friction absolute integral'].values
+    print(f"Actual measurement found for validation: {val_file_id}")
+else:
+    print("Exact actual measurement not found for the given validation parameters. Showing predictions only.")
+
+val_df_curve = pd.DataFrame({
+    'Time': template_df['Time'],
+    'Load': val_load,
+    'Temperature': val_temp,
+    'Concentration': val_conc,
+    'Esterified': val_ester
+})
+val_df_curve = create_features(val_df_curve)[X_cols_raw]
+val_trans_curve = global_vif.transform(global_interact.transform(val_df_curve))
+
+val_df_point = pd.DataFrame({
+    'Time': [7050],
+    'Load': [val_load],
+    'Temperature': [val_temp],
+    'Concentration': [val_conc],
+    'Esterified': [val_ester]
+})
+val_df_point = create_features(val_df_point)[X_cols_raw]
+val_trans_point = global_vif.transform(global_interact.transform(val_df_point))
+
+val_table_data = []
+fig_val_cof, ax_val_cof = plt.subplots(figsize=(8, 4.5))
+fig_val_fai, ax_val_fai = plt.subplots(figsize=(8, 4.5))
+
+if actual_time is not None:
+    ax_val_cof.plot(actual_time, actual_cof, color='black', linewidth=1.5, linestyle='-', label='Actual measurement', zorder=10)
+    ax_val_fai.plot(actual_time, actual_fai, color='black', linewidth=1.5, linestyle='-', label='Actual measurement', zorder=10)
+
+val_styles = {
+    'Ensemble (Top 3 Voting)': ('#911eb4', '--', 2.5),
+    'XGBoost': ('#e6194B', '-', 1.5),
+    'LightGBM': ('#3cb44b', '-', 1.5),
+    'CatBoost': ('#4363d8', '-', 1.5),
+    'Neural Network (MLP)': ('#f58231', '-', 1.5),
+    'Random Forest': ('#800000', '-.', 1.5),
+    'KNN Regressor': ('#008080', ':', 1.5),
+    'Ridge Regression': ('#f032e6', '-.', 1.5)
+}
+
+for res in results:
+    model_name = res['Name']
+    if model_name in ['KNN Regressor', 'Ridge Regression']:
+        continue
+        
+    model = res['Model']
+    
+    preds_curve = np.maximum(model.predict(val_trans_curve), config.PREDICTION_LOWER_BOUND)[:, 0]
+    preds_curve_fai = np.maximum(model.predict(val_trans_curve), config.PREDICTION_LOWER_BOUND)[:, 1]
+    
+    c, ls, lw = val_styles.get(model_name, ('grey', '-', 1.5))
+    alpha = 0.9 if "Ensemble" in model_name else 0.7
+    
+    ax_val_cof.plot(template_df['Time'], preds_curve, color=c, linestyle=ls, linewidth=lw, alpha=alpha, label=model_name)
+    ax_val_fai.plot(template_df['Time'], preds_curve_fai, color=c, linestyle=ls, linewidth=lw, alpha=alpha, label=model_name)
+    
+    preds_point = np.maximum(model.predict(val_trans_point), config.PREDICTION_LOWER_BOUND)[0]
+    val_table_data.append({
+        'Model': model_name,
+        'Predicted_COF': preds_point[0],
+        'Predicted_FAI': preds_point[1]
+    })
+
+ester_str = "Esterified" if val_ester == 1 else "Not esterified"
+
+ax_val_cof.set_xlabel('Time [s]')
+ax_val_cof.set_ylabel('Coefficient of Friction (COF) [-]')
+ax_val_cof.set_title(f'COF Validation Curve ({val_load}N, {val_temp}°C, {val_conc}wt%, {ester_str})', fontsize=11)
+ax_val_cof.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=10)
+fig_val_cof.tight_layout()
+val_filename_cof = f"Validation_Curve_COF_{val_load}N_{val_temp}C_{str(val_conc).replace('.','')}wt.png"
+fig_val_cof.savefig(os.path.join(config.RESULTS_DIR, val_filename_cof), dpi=config.PLOT_SETTINGS['dpi'])
+plt.close(fig_val_cof)
+dynamic_descriptions[val_filename_cof] = f"COF Validation curve predictions vs actual measurement at {val_load}N, {val_temp}°C, {val_conc}wt% ({ester_str})."
+
+ax_val_fai.set_xlabel('Time [s]')
+ax_val_fai.set_ylabel('Friction Absolute Integral (FAI) [-]')
+ax_val_fai.set_title(f'FAI Validation Curve ({val_load}N, {val_temp}°C, {val_conc}wt%, {ester_str})', fontsize=11)
+ax_val_fai.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=10)
+fig_val_fai.tight_layout()
+val_filename_fai = f"Validation_Curve_FAI_{val_load}N_{val_temp}C_{str(val_conc).replace('.','')}wt.png"
+fig_val_fai.savefig(os.path.join(config.RESULTS_DIR, val_filename_fai), dpi=config.PLOT_SETTINGS['dpi'])
+plt.close(fig_val_fai)
+dynamic_descriptions[val_filename_fai] = f"FAI Validation curve predictions vs actual measurement at {val_load}N, {val_temp}°C, {val_conc}wt% ({ester_str})."
+
+val_table_df = pd.DataFrame(val_table_data)
+print(f"\n>> Validation Predictions ({val_load}N, {val_temp}°C, {val_conc}wt%, {ester_str}):")
+print(val_table_df.to_string(index=False, float_format=lambda x: f"{x:.4f}"))
+
+print("\n--- Generating 2D Contour Plots... ---")
 def plot_contour(var1_name, var1_range, var2_name, var2_range, fixed_vars, filename_suffix, ester_state=None, target_idx=0, target_name='COF'):
     if ester_state is None:
         ester_state = config.PLOT_ESTERIFIED_STATE
@@ -2107,11 +2197,10 @@ dynamic_descriptions[fn12] = "Base Oil 2D Contour Plot showing expected COF for 
 
 plot_df = full_df.groupby('File_ID').agg({'Load': 'mean', 'Temperature': 'mean', 'Concentration': 'mean', 'Esterified': 'first'}).reset_index()
 
-# Pozíció-zaj (jitter) hozzáadása, hogy az egybeeső mérések apró "felhőkké" váljanak és mind látszódjon
 np.random.seed(config.RANDOM_SEED)
 plot_df['Load_plot'] = plot_df['Load'] + np.random.uniform(-2.0, 2.0, size=len(plot_df))
 plot_df['Temperature_plot'] = plot_df['Temperature'] + np.random.uniform(-1.0, 1.0, size=len(plot_df))
-plot_df['Concentration_plot'] = np.clip(plot_df['Concentration'] + np.random.uniform(-0.01, 0.01, size=len(plot_df)), 0, None) # Ne menjen 0 alá
+plot_df['Concentration_plot'] = np.clip(plot_df['Concentration'] + np.random.uniform(-0.01, 0.01, size=len(plot_df)), 0, None)
 
 base_pts = plot_df[plot_df['Esterified'] == 0]
 ester_pts = plot_df[plot_df['Esterified'] == 1]
@@ -2192,27 +2281,33 @@ corr_df = pd.concat([Y, X_interact], axis=1)
 
 target_cols = ['COF', 'Friction absolute integral']
 input_cols = list(X_interact.columns)
-
-target_labels = [config.NAME_MAPPING.get(col, col) for col in target_cols]
-input_labels = [config.NAME_MAPPING.get(col, col) for col in input_cols]
-
 corr_matrix = corr_df.corr().loc[target_cols, input_cols]
 
-plt.figure(figsize=(18, 4))
-im = plt.imshow(corr_matrix, cmap='coolwarm', interpolation='nearest', vmin=-1, vmax=1)
-plt.colorbar(im)
-plt.grid(False)
-for i in range(len(target_cols)):
-    for j in range(len(input_cols)):
-        val = corr_matrix.iloc[i, j]
-        plt.text(j, i, f"{val:.2f}", ha="center", va="center", color="white" if abs(val) > 0.5 else "black", fontsize=9)
-plt.xticks(range(len(input_cols)), input_labels, rotation=45, ha='right', fontsize=10)
-plt.yticks(range(len(target_cols)), target_labels, fontsize=11)
-plt.tight_layout()
-plt.savefig(os.path.join(config.RESULTS_DIR, "Correlation_matrix.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
-plt.close()
+base_cols = ['Time', 'Log_Time', 'Time_Squared', 'Load', 'Temperature', 'Concentration', 'Esterified', 'Hertz_Stress_MPa']
+interact_cols = [col for col in input_cols if col not in base_cols]
 
-print("\n--- Learning Curve generálása kiválasztott modellekhez... ---")
+for suffix, cols in [("Basic", base_cols), ("Interactions", interact_cols)]:
+    part_corr = corr_matrix.loc[:, cols]
+    target_labels = [config.NAME_MAPPING.get(col, col).replace(' [N]', '').replace(' [°C]', '') for col in target_cols]
+    input_labels = [config.NAME_MAPPING.get(col, col).replace(' [N]', '').replace(' [°C]', '') for col in cols]
+    
+    plt.figure(figsize=(10 if suffix == "Basic" else 12, 4))
+    im = plt.imshow(part_corr, cmap='coolwarm', interpolation='nearest', vmin=-1, vmax=1)
+    plt.colorbar(im)
+    plt.grid(False)
+    for i in range(len(target_cols)):
+        for j in range(len(cols)):
+            val = part_corr.iloc[i, j]
+            plt.text(j, i, f"{val:.2f}", ha="center", va="center", color="white" if abs(val) > 0.5 else "black", fontsize=9)
+    plt.xticks(range(len(cols)), input_labels, rotation=45, ha='right', fontsize=10)
+    plt.yticks(range(len(target_cols)), target_labels, fontsize=11)
+    plt.tight_layout()
+    fname = f"Correlation_matrix_{suffix}.png"
+    plt.savefig(os.path.join(config.RESULTS_DIR, fname), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
+    plt.close()
+    dynamic_descriptions[fname] = f"Strength of linear relationships between {suffix.lower()} variables (Pearson correlation)."
+
+print("\n--- Generating Learning Curves for selected models... ---")
 target_models = {"XGBoost", "LightGBM", "CatBoost", best_model_name}
 for res in results:
     if res['Name'] in target_models:
@@ -2243,6 +2338,7 @@ data_0 = file_means[file_means['Esterified'] == 0]['COF'].dropna().values
 data_1 = file_means[file_means['Esterified'] == 1]['COF'].dropna().values
 
 if len(data_0) > 0 and len(data_1) > 0:
+    # --- PLOT: Last 5m COF Distribution Boxplot ---
     fig, ax = plt.subplots(figsize=(6.3, 3.15))
     bplot = ax.boxplot([data_0, data_1], positions=[0, 1], patch_artist=True, widths=0.4,
                        medianprops=dict(color='black', linewidth=1.5))
@@ -2264,6 +2360,7 @@ if len(data_0) > 0 and len(data_1) > 0:
 file_means['Load_rounded'] = file_means['Load'].round()
 load_ester_stats = file_means.groupby(['Load_rounded', 'Esterified'])['COF'].agg(['mean', 'std']).reset_index()
 
+# --- PLOT: Esterification Impact vs Load (Actual Data) ---
 fig, ax = plt.subplots(figsize=(6.3, 3.15))
 
 base_stats = load_ester_stats[load_ester_stats['Esterified'] == 0].sort_values('Load_rounded')
@@ -2291,6 +2388,7 @@ plt.close()
 file_means['Temp_rounded'] = file_means['Temperature'].round()
 temp_ester_stats = file_means.groupby(['Temp_rounded', 'Esterified'])['COF'].agg(['mean', 'std']).reset_index()
 
+# --- PLOT: Esterification Impact vs Temperature (Actual Data) ---
 fig, ax = plt.subplots(figsize=(6.3, 3.15))
 
 base_stats_t = temp_ester_stats[temp_ester_stats['Esterified'] == 0].sort_values('Temp_rounded')
@@ -2359,6 +2457,8 @@ while not excel_saved and attempt < 5:
             pd.DataFrame(opt_data).drop(columns=['CurveTime', 'CurveCOF']).to_excel(writer, sheet_name='Optimums', index=False)
             doe_suggestions_combined.to_excel(writer, sheet_name='DoE_Suggestions', index=False)
             
+            val_table_df.to_excel(writer, sheet_name='Validation_Point', index=False)
+            
             steady_export_df = file_means.copy().reset_index()
             steady_export_df['Load'] = steady_export_df['Load'].round(0).astype(int)
             steady_export_df['Temperature'] = steady_export_df['Temperature'].round(0).astype(int)
@@ -2381,9 +2481,9 @@ while not excel_saved and attempt < 5:
         excel_saved = True
     except PermissionError:
         attempt += 1
-        print(f"\nFigyelem: A '{excel_path}' fájl meg van nyitva (pl. Excelben) és nem felülírható.")
+        print(f"\nWarning: The file '{excel_path}' is open (e.g., in Excel) and cannot be overwritten.")
         excel_path = os.path.join(config.RESULTS_DIR, f"Results_Tables_alt_{attempt}.xlsx")
-        print(f"Kísérlet mentésre új néven: {excel_path}")
+        print(f"Attempting to save with new name: {excel_path}")
 
 joblib.dump(best_model_overall, os.path.join(config.RESULTS_DIR, f"Best_Model_{best_model_name.replace(' ', '_')}.pkl"))
 
