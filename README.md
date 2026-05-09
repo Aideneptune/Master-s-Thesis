@@ -54,7 +54,8 @@ A program az adatok betöltését és a modellek betanítását alapértelmezett
 
 ## Kiegészítő szkriptek
 A projekt tartalmaz néhány kiegészítő szkriptet is, amelyek a diplomamunkához szükséges extra ábrákat és folyamatábrákat generálják:
-* `Hertzian.py`: Legenerálja a Hertz-féle feszültségeloszlást bemutató 3D-s ábrát.
-* `Stribeck Curve.py`: Egy idealizált Stribeck-görbét rajzol ki.
+* `Hertzian_Stress.py`: Legenerálja a Hertz-féle feszültségeloszlást bemutató 3D-s ábrát.
+* `Stribeck_Curve.py`: Egy idealizált Stribeck-görbét rajzol ki.
+* `3D_GIFS.py`: Mérési pontokat tartalmazó, ide-oda mozgó .gif fájlokat készít.
 
 Ezeket a `python fájlnév.py` paranccsal külön lehet futtatni.
