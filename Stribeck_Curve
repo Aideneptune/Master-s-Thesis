@@ -21,21 +21,34 @@ plt.rcParams.update({
 x = np.linspace(0, 4.5, 1000)
 y = np.zeros_like(x)
 
+# Define boundary points
+boundary_end = 0.8
+mixed_end = 2.6
+
+y_min = 0.025
+y_start = 0.12
+
 # Curve sections
-mask_boundary = x <= 1.2
-y[mask_boundary] = 0.12
+mask_boundary = x <= boundary_end
+y[mask_boundary] = y_start
 
-mask_mixed = (x > 1.2) & (x <= 2.8)
-y[mask_mixed] = 0.03 + (0.12 - 0.03) / 2 * (1 + np.cos(np.pi * (x[mask_mixed] - 1.2) / 1.6))
+# Mixed state: Cosine smoothing
+mask_mixed = (x > boundary_end) & (x <= mixed_end)
+y[mask_mixed] = y_min + (y_start - y_min) * 0.5 * (1 + np.cos(np.pi * (x[mask_mixed] - boundary_end) / (mixed_end - boundary_end)))
 
-mask_hydro = x > 2.8
-y[mask_hydro] = 0.03 + 0.02 * (x[mask_hydro] - 2.8)
+# Hydrodynamic state
+mask_hydro = x > mixed_end
+y[mask_hydro] = y_min + 0.025 * (x[mask_hydro] - mixed_end)
 
 fig, ax = plt.subplots()
 
 ax.plot(x, y, color='purple')
 
-ax.set_xlabel('Oil-film thickness / surface roughness', fontweight='bold', loc='right')
+# Axis labels
+xlabel_text = r'$\mathbf{\frac{Film\ thickness}{Surface\ roughness} \ (\boldsymbol{\lambda})}$'
+ax.set_xlabel(xlabel_text, fontweight='bold')
+ax.xaxis.set_label_coords(0.85, -0.1)
+
 ax.set_ylabel(r'Coefficient of Friction ($\mu$)', fontweight='bold', loc='top')
 
 # Hide spines and ticks
@@ -52,26 +65,26 @@ ax.spines['bottom'].set_linewidth(1.5)
 ax.plot(1, 0, transform=ax.get_yaxis_transform(), clip_on=False, marker='>', markersize=8, color='black')
 ax.plot(0, 1, transform=ax.get_xaxis_transform(), clip_on=False, marker='^', markersize=8, color='black')
 
-# Separator lines
-ax.axvline(x=1.2, color='black', linestyle='--', linewidth=1.5)
-ax.axvline(x=2.8, color='black', linestyle='--', linewidth=1.5)
+# Separator lines at transition points
+ax.axvline(x=boundary_end, color='black', linestyle='--', linewidth=1.5)
+ax.axvline(x=mixed_end, color='black', linestyle='--', linewidth=1.5)
 
 # Annotations
 arrow_props = dict(arrowstyle='->', color='black', lw=1.5)
 text_y_pos = 0.015
 
-ax.annotate('Boundary\nstate', xy=(0.6, 0.105), xytext=(0.6, text_y_pos),
+ax.annotate('Boundary\nstate', xy=(boundary_end/2, 0.105), xytext=(boundary_end/2, text_y_pos),
             ha='center', va='center', fontweight='bold', arrowprops=arrow_props)
 
-ax.annotate('Mixed\nstate', xy=(2.0, 0.065), xytext=(2.0, text_y_pos),
+ax.annotate('Mixed\nstate', xy=((boundary_end + mixed_end)/2, 0.06), xytext=((boundary_end + mixed_end)/2, text_y_pos),
             ha='center', va='center', fontweight='bold', arrowprops=arrow_props)
 
-ax.annotate('Hydrodynamic\nstate', xy=(3.6, 0.038), xytext=(3.6, text_y_pos),
+ax.annotate('Hydrodynamic\nstate', xy=(3.6, 0.045), xytext=(3.6, text_y_pos),
             ha='center', va='center', fontweight='bold', arrowprops=arrow_props)
 
 ax.set_xlim(0, 4.6)
 ax.set_ylim(0, 0.14)
 
 plt.tight_layout()
-plt.savefig('stribeck_gorbe_300dpi.png', dpi=300, bbox_inches='tight', pad_inches=0.1)
+plt.savefig('stribeck_curve.png', dpi=300, bbox_inches='tight', pad_inches=0.1)
 plt.show()
