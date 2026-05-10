@@ -833,7 +833,7 @@ if dropped_count > 0:
     ax.axhline(0, color='grey', linestyle='-', linewidth=1)
     ax.set_xlabel("Time [s]")
     ax.set_ylabel("Residual error")
-    ax.legend(loc='upper right', frameon=True, facecolor='white', framealpha=0.85, edgecolor='black', fancybox=True)
+    ax.legend(loc='lower center', bbox_to_anchor=(0.5, 1.02), ncol=2, frameon=True, facecolor='white', framealpha=1.0, edgecolor='black', fancybox=True)
     dynamic_descriptions["Dropped_Anomalies.png"] = "Scatter plot showing all data points. Red points indicate anomalies (|Error| > 0.05) that were dropped before final model retraining."
     plt.savefig(os.path.join(config.RESULTS_DIR, "Dropped_Anomalies.png"), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
     plt.close()
@@ -1269,12 +1269,12 @@ for res in results:
     preds = np.maximum(model.predict(X_test), config.PREDICTION_LOWER_BOUND)
     
     fig, ax = plt.subplots(figsize=(6.3, 3.15))
-    plt.scatter(y_test['COF'].values, preds[:, 0], alpha=0.3, color='royalblue', edgecolors='lightgrey', linewidths=0.5)
+    plt.scatter(y_test['COF'].values, preds[:, 0], alpha=0.4, color='purple', edgecolors='none')
     min_val = min(np.min(y_test['COF'].values), np.min(preds[:, 0]))
     max_val = max(np.max(y_test['COF'].values), np.max(preds[:, 0]))
     plt.plot([min_val, max_val], [min_val, max_val], color='black', linestyle='--', linewidth=2)
-    plt.xlabel("Actual COF")
-    plt.ylabel("Predicted COF")
+    plt.xlabel("Actual COF [-]")
+    plt.ylabel("Predicted COF [-]")
     plt.title(f"{model_name}", fontsize=11)
     ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{y:g}'))
     ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f'{x:g}'))
@@ -1296,6 +1296,55 @@ for res in results:
     dynamic_descriptions[hist_filename] = f"Histogram of residual errors for {model_name}."
     plt.savefig(os.path.join(config.RESULTS_DIR, hist_filename), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
     plt.close()
+
+print("\n--- Generating 2x2 Combined Actual vs Predicted Plot... ---")
+models_to_plot = ["CatBoost", "XGBoost", "Ensemble (Top 3 Voting)", "KNN Regressor"]
+labels_2x2 = ['(a)', '(b)', '(c)', '(d)']
+
+fig_2x2, axes_2x2 = plt.subplots(2, 2, figsize=(10, 10))
+axes_2x2 = axes_2x2.flatten()
+
+for idx, m_name in enumerate(models_to_plot):
+    ax = axes_2x2[idx]
+    res = next((r for r in results if r['Name'] == m_name), None)
+    if res is not None:
+        model = res['Model']
+        preds = np.maximum(model.predict(X_test), config.PREDICTION_LOWER_BOUND)
+        
+        ax.scatter(y_test['COF'].values, preds[:, 0], alpha=0.4, color='purple', edgecolors='none')
+        
+        overall_min = min(np.min(y_test['COF'].values), np.min(preds[:, 0]))
+        overall_max = max(np.max(y_test['COF'].values), np.max(preds[:, 0]))
+        pad = (overall_max - overall_min) * 0.05
+        
+        ax.set_xlim(overall_min - pad, overall_max + pad)
+        ax.set_ylim(overall_min - pad, overall_max + pad)
+        
+        ax.plot([overall_min, overall_max], [overall_min, overall_max], color='black', linestyle='--', linewidth=2)
+        
+        if idx >= 2:
+            ax.set_xlabel("Actual COF [-]")
+        else:
+            ax.tick_params(labelbottom=False)
+            
+        if idx % 2 == 0:
+            ax.set_ylabel("Predicted COF [-]")
+        else:
+            ax.tick_params(labelleft=False)
+        
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{y:g}'))
+        ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f'{x:g}'))
+        ax.set_aspect('equal', adjustable='box')
+        
+        ax.text(0.05, 0.95, labels_2x2[idx], transform=ax.transAxes, 
+                fontsize=14, fontweight='bold', va='top', ha='left',
+                bbox=dict(facecolor='white', edgecolor='none', alpha=0.8))
+
+fig_2x2.tight_layout()
+filename_2x2 = "Actual_vs_Predicted_2x2_Combined.png"
+dynamic_descriptions[filename_2x2] = "Actual vs. Predicted COF values for (a) CatBoost, (b) XGBoost, (c) Ensemble, and (d) KNN Regressor."
+fig_2x2.savefig(os.path.join(config.RESULTS_DIR, filename_2x2), dpi=config.PLOT_SETTINGS['dpi'], bbox_inches='tight', pad_inches=0.1)
+plt.close(fig_2x2)
 
 print("\n--- Generating model comparison plots... ---")
 sorted_results_for_plots = sorted(results, key=lambda x: x['R2_Train'], reverse=True)
